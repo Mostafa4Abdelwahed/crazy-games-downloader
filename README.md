@@ -191,7 +191,10 @@ REAL_TEST_SOURCE_URL=https://www.crazygames.com/game/<slug> npm run validate:rea
 
 - `.env`: `SOURCE_ALLOWED_HOSTS` (your authorized partners), `REDIS_URL` +
   `QUEUE_DRIVER=bullmq` for prod, `DATABASE_URL` for Postgres, `STORAGE_*`,
-  `RUNTIME_VALIDATION_TIMEOUT_MS` for slower builds.
+  `RUNTIME_VALIDATION_TIMEOUT_MS` for slower builds,
+  `RUNTIME_VALIDATION_SETTLE_MS` for late-loading audio banks,
+  `UNITY_STREAMING_ASSETS_*` caps/toggles for dependency discovery
+  (see `.env.example`).
 - Production: TLS, isolated game-serving origin + sandbox CSP headers, Redis
   persistence, DB backups, secret management (never commit `.env`).
 - Adding an engine: implement `GameEngineImporter`, register in
@@ -208,7 +211,13 @@ REAL_TEST_SOURCE_URL=https://www.crazygames.com/game/<slug> npm run validate:rea
   availability of those services is not retried or proxied.
 - Single-file/bundled Unity builds (no separate `.loader.js`) are not
   importable — loader discovery requires a loader script reference.
-- StreamingAssets directories are recorded, not recursively downloaded.
+- StreamingAssets dependencies are discovered at import time (bounded
+  runtime network observation under the Unity `streamingAssetsUrl` prefix
+  plus static `StreamingAssets/...` references, SourcePolicy-gated,
+  capped, nested paths preserved under `package/StreamingAssets/`) and
+  runtime validation keeps observing past boot (settle window) so late
+  bank/asset 404s and FMOD failures report `RUNTIME_ERROR` instead of a
+  premature `RUNTIME_OK`.
 
 ## Scripts
 

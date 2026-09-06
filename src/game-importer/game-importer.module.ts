@@ -14,6 +14,7 @@ import { UnityLoaderParser } from './engines/unity/unity.loader-parser';
 import { UnityAssetResolver } from './engines/unity/unity.asset-resolver';
 import { UnityConfigDiscovery } from './engines/unity/unity.config-discovery';
 import { UnityDecompressor } from './engines/unity/unity.decompressor';
+import { UnityStreamingAssetsDiscovery } from './engines/unity/unity.streaming-assets-discovery';
 import { UnityValidator } from './engines/unity/unity.validator';
 import { UnityImporter } from './engines/unity/unity.importer';
 import { GenericHtml5Importer } from './engines/generic-html5.importer';
@@ -48,6 +49,7 @@ const SOURCE_ADAPTER_COLLECTION = 'SOURCE_ADAPTER_COLLECTION';
     UnityAssetResolver,
     UnityConfigDiscovery,
     UnityDecompressor,
+    UnityStreamingAssetsDiscovery,
     UnityValidator,
     UnityImporter,
     GenericHtml5Importer,

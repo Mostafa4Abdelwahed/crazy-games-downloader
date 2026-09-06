@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
@@ -17,6 +17,13 @@ import { UnityLoaderParser, findLoaderUrlInHints } from './unity.loader-parser';
 import { UnityAssetResolver } from './unity.asset-resolver';
 import { UnityConfigDiscovery } from './unity.config-discovery';
 import { UnityDecompressor } from './unity.decompressor';
+import { UnityStreamingAssetsDiscovery } from './unity.streaming-assets-discovery';
+import {
+  STREAMING_ASSETS_SEGMENT,
+  defaultStreamingAssetsOptions,
+  extractStreamingAssetsRefs,
+  normalizeStreamingPrefix,
+} from './unity.streaming-assets';
 import {
   contentTypeForFile,
   normalizePackagePath,
@@ -61,6 +68,8 @@ export class UnityImporter implements GameEngineImporter {
     private readonly decompressor: UnityDecompressor,
     private readonly discovery: UnityConfigDiscovery,
     private readonly policy: SourcePolicyService,
+    @Optional()
+    private readonly streamingAssets?: UnityStreamingAssetsDiscovery,
   ) {}
 
   async detect(context: DetectionContext): Promise<DetectionResult> {
@@ -214,6 +223,29 @@ export class UnityImporter implements GameEngineImporter {
     const loaderRawPath = path.join(rawDir, loaderFileName);
     await fs.promises.writeFile(loaderRawPath, loaderRes.body);
     downloaded.push({ url: loaderUrl, filePath: loaderRawPath });
+    // Localize an embedded streamingAssetsUrl literal in the packaged
+    // loader (narrow, known-key-only rewrite): an absolute remote value
+    // would otherwise keep post-boot bank requests on the remote origin
+    // instead of the self-contained package. Generic loaders without a
+    // literal are untouched.
+    if (resolved.streamingAssetsUrl) {
+      try {
+        const localized = this.resolver.rewriteKnownConfigRefs(loaderJs, {
+          streamingAssetsUrl: STREAMING_ASSETS_SEGMENT,
+        });
+        if (localized !== loaderJs) {
+          await fs.promises.writeFile(loaderRawPath, localized, 'utf8');
+          emit(
+            'info',
+            DiagnosticCode.UNITY_ASSET_URL_RESOLVED,
+            'Localized streamingAssetsUrl in packaged loader',
+            { field: 'streamingAssetsUrl' },
+          );
+        }
+      } catch {
+        /* keep the original loader bytes on any rewrite failure */
+      }
+    }
     done++;
     await report({ downloadedFiles: done });
 
@@ -274,6 +306,30 @@ export class UnityImporter implements GameEngineImporter {
         bytes: bytes.length,
       });
       await report({ downloadedFiles: done });
+    }
+
+    // 4b. Bounded StreamingAssets dependency discovery (generic, M3.2).
+    // The Unity config value `streamingAssetsUrl` is an expectation signal
+    // only: actual files are discovered from observed runtime requests
+    // under that prefix (+ static quoted refs in downloaded text), never
+    // hardcoded and never crawled blindly. Adapter-hint configs may carry
+    // the prefix signal; when no explicit signal exists, static refs and
+    // segment-scoped runtime observation still apply. Every candidate is
+    // gated by SourcePolicy (requested + final URL) and downloaded through
+    // the SSRF-guarded downloader.
+    const streamingFiles: { path: string; sourceUrl: string }[] = [];
+    {
+      const sa = await this.discoverStreamingAssets({
+        streamingAssetsUrl: resolved.streamingAssetsUrl,
+        configBaseUrl: discovered.configBaseUrl,
+        remoteEntryUrl: entryTarget,
+        loaderJs,
+        downloaded,
+        pkgDir,
+        limits,
+        emit,
+      });
+      for (const f of sa) streamingFiles.push(f);
     }
 
     // 5. Normalize into package/
@@ -346,6 +402,33 @@ export class UnityImporter implements GameEngineImporter {
       await pushFile(dest, `Build/${base}`);
     }
 
+    for (const s of streamingFiles) {
+      const abs = path.join(pkgDir, ...s.path.split('/'));
+      await pushFile(abs, s.path);
+    }
+
+    // 5b. Local-package completion loop: boot the provisional package in
+    // an isolated browser and package any additional StreamingAssets
+    // dependencies it requests (FMOD banks are constructed at runtime, so
+    // static signals alone cannot find them). Downloaded through the same
+    // policy/SSRF-guarded pipeline and merged into the manifest below.
+    {
+      const already = new Set(streamingFiles.map((s) => s.path));
+      const extra = await this.completeStreamingAssetsFromLocalPackage({
+        pkgDir,
+        signal: resolved.streamingAssetsUrl,
+        configBaseUrl: discovered.configBaseUrl,
+        already,
+        limits,
+        emit,
+      });
+      for (const f of extra) {
+        const abs = path.join(pkgDir, ...f.path.split('/'));
+        await pushFile(abs, f.path);
+        streamingFiles.push(f);
+      }
+    }
+
     // Copy original loader body into package Build/ too if raw==dest handled above.
     void resolved;
     const totalBytes = files.reduce((a, f) => a + f.bytes, 0);
@@ -404,6 +487,314 @@ export class UnityImporter implements GameEngineImporter {
   }
 
   /**
+   * Bounded StreamingAssets dependency phase (generic, M3.2).
+   *
+   * 1. Static refs from the loader text + downloaded framework text.
+   * 2. Runtime network observation of the authorized remote entry in an
+   *    isolated browser (skipped when disabled/unavailable — static
+   *    signals alone still work).
+   * 3. Policy-gated, deduped, capped download into the package's
+   *    `StreamingAssets/...` tree (nesting preserved).
+   *
+   * Runs even without an explicit `streamingAssetsUrl` signal: static refs
+   * imply the conventional prefix, and runtime observation falls back to
+   * matching any URL carrying the `StreamingAssets` segment. Fully skipped
+   * only when there is no signal, no static ref, AND runtime observation
+   * is disabled.
+   */
+  private async discoverStreamingAssets(args: {
+    streamingAssetsUrl?: string;
+    configBaseUrl: string;
+    remoteEntryUrl: string;
+    loaderJs: string;
+    downloaded: { url: string; filePath: string }[];
+    pkgDir: string;
+    limits: ImportLimits;
+    emit: (
+      level: DiagnosticLevel,
+      code: string,
+      message: string,
+      details?: Record<string, unknown>,
+    ) => void;
+  }): Promise<{ path: string; sourceUrl: string }[]> {
+    const {
+      streamingAssetsUrl,
+      configBaseUrl,
+      remoteEntryUrl,
+      loaderJs,
+      downloaded,
+      pkgDir,
+      limits,
+      emit,
+    } = args;
+    const svc =
+      this.streamingAssets ??
+      new UnityStreamingAssetsDiscovery(this.downloader, this.policy);
+    const opts = defaultStreamingAssetsOptions();
+    const signal = (streamingAssetsUrl ?? '').trim();
+    // Static signals: loader text + already-downloaded framework text.
+    const staticPaths = new Set<string>();
+    for (const p of extractStreamingAssetsRefs(loaderJs)) staticPaths.add(p);
+    for (const d of downloaded) {
+      if (!/\.framework\.js$/i.test(d.filePath)) continue;
+      try {
+        const text = await fs.promises.readFile(d.filePath, 'utf8');
+        for (const p of extractStreamingAssetsRefs(text.slice(0, 1_000_000))) {
+          staticPaths.add(p);
+        }
+      } catch {
+        /* unreadable framework — runtime observation still applies */
+      }
+    }
+    const runtimeEnabled =
+      (
+        process.env.UNITY_STREAMING_ASSETS_RUNTIME_DISCOVERY ?? 'true'
+      ).toLowerCase() !== 'false';
+    if (signal) {
+      if (!normalizeStreamingPrefix(signal)) {
+        emit(
+          'warning',
+          DiagnosticCode.EXTERNAL_REFERENCE,
+          'Ignoring unresolvable streamingAssetsUrl signal',
+        );
+        return [];
+      }
+    } else if (staticPaths.size === 0 && !runtimeEnabled) {
+      emit(
+        'info',
+        DiagnosticCode.UNITY_STREAMING_ASSETS_DISCOVERY_COMPLETED,
+        'StreamingAssets discovery skipped: no prefix signal, no static refs, runtime observation disabled',
+      );
+      return [];
+    }
+    // No explicit signal: match any URL carrying the StreamingAssets
+    // segment; resolve static refs against the conventional prefix.
+    const matchBase = signal || '';
+    const resolveBase = signal || STREAMING_ASSETS_SEGMENT;
+    const prefix =
+      normalizeStreamingPrefix(resolveBase) ?? STREAMING_ASSETS_SEGMENT;
+
+    // Runtime observation (bounded, isolated, policy-gated inside).
+    let observedUrls: string[] = [];
+    if (runtimeEnabled) {
+      try {
+        const obs = await svc.collectRuntimeUrls({
+          entryUrl: remoteEntryUrl,
+          configBaseUrl,
+          streamingAssetsUrl: matchBase,
+          timeoutMs: Math.min(opts.discoveryTimeoutMs, limits.timeoutMs),
+          maxFiles: opts.maxFiles,
+        });
+        for (const d of obs.diagnostics)
+          emit(d.level, d.code, d.message, d.details);
+        observedUrls = obs.urls;
+      } catch (err) {
+        emit(
+          'warning',
+          DiagnosticCode.NETWORK_FAILURE,
+          'StreamingAssets runtime discovery failed; continuing with static signals',
+          { reason: (err as Error).message.slice(0, 200) },
+        );
+      }
+    }
+
+    const { urls: candidates, limitReached } = svc.resolveCandidates({
+      observedUrls,
+      staticPaths: [...staticPaths],
+      streamingAssetsUrl: matchBase,
+      staticResolveBase: resolveBase,
+      configBaseUrl,
+      maxFiles: opts.maxFiles,
+    });
+    if (limitReached) {
+      emit(
+        'warning',
+        DiagnosticCode.UNITY_STREAMING_ASSETS_DISCOVERY_LIMIT_REACHED,
+        `StreamingAssets candidate cap reached (${opts.maxFiles}); additional dependencies ignored`,
+        { maxFiles: opts.maxFiles },
+      );
+    }
+    if (candidates.length === 0) {
+      emit(
+        'info',
+        DiagnosticCode.UNITY_STREAMING_ASSETS_DISCOVERY_COMPLETED,
+        'StreamingAssets discovery completed: no dependencies observed',
+        { prefix },
+      );
+      return [];
+    }
+    return this.downloadStreamingCandidates(
+      candidates,
+      { pkgDir, limits, emit },
+      `StreamingAssets discovery completed`,
+      { prefix },
+    );
+  }
+
+  /**
+   * Local-package completion loop (generic, M3.2): boot the provisional
+   * package in an isolated browser and package any additional
+   * StreamingAssets dependencies it requests. FMOD bank names are
+   * constructed at runtime from the config prefix, so this is the only
+   * signal that can find them; portal pages frequently refuse to boot
+   * under automation, which is why the LOCAL package (proven bootable by
+   * runtime validation) is observed instead of the remote source.
+   */
+  private async completeStreamingAssetsFromLocalPackage(args: {
+    pkgDir: string;
+    signal?: string;
+    configBaseUrl: string;
+    already: Set<string>;
+    limits: ImportLimits;
+    emit: (
+      level: DiagnosticLevel,
+      code: string,
+      message: string,
+      details?: Record<string, unknown>,
+    ) => void;
+  }): Promise<{ path: string; sourceUrl: string }[]> {
+    const { pkgDir, signal, configBaseUrl, already, limits, emit } = args;
+    const localEnabled =
+      (
+        process.env.UNITY_STREAMING_ASSETS_LOCAL_DISCOVERY ?? 'true'
+      ).toLowerCase() !== 'false';
+    if (!localEnabled) {
+      emit(
+        'info',
+        DiagnosticCode.UNITY_STREAMING_ASSETS_DISCOVERY_COMPLETED,
+        'StreamingAssets local completion disabled; package keeps pre-packaged dependencies only',
+      );
+      return [];
+    }
+    const svc =
+      this.streamingAssets ??
+      new UnityStreamingAssetsDiscovery(this.downloader, this.policy);
+    const opts = defaultStreamingAssetsOptions();
+    const remaining = opts.maxFiles - already.size;
+    if (remaining <= 0) {
+      emit(
+        'warning',
+        DiagnosticCode.UNITY_STREAMING_ASSETS_DISCOVERY_LIMIT_REACHED,
+        'StreamingAssets file cap already reached; skipping local completion',
+        { maxFiles: opts.maxFiles },
+      );
+      return [];
+    }
+    const localTimeout = Math.min(
+      Number(process.env.UNITY_STREAMING_ASSETS_LOCAL_TIMEOUT_MS ?? 30_000),
+      limits.timeoutMs,
+    );
+    let observed: string[] = [];
+    try {
+      const obs = await svc.observeLocalPaths({
+        pkgDir,
+        timeoutMs: localTimeout,
+        maxFiles: opts.maxFiles,
+        knownPaths: already,
+      });
+      for (const d of obs.diagnostics)
+        emit(d.level, d.code, d.message, d.details);
+      observed = obs.paths;
+    } catch (err) {
+      emit(
+        'warning',
+        DiagnosticCode.NETWORK_FAILURE,
+        'StreamingAssets local observation failed; package keeps pre-packaged dependencies only',
+        { reason: (err as Error).message.slice(0, 200) },
+      );
+      return [];
+    }
+    const fresh = observed.filter((p) => !already.has(p));
+    if (fresh.length === 0) {
+      return [];
+    }
+    const { urls: candidates } = svc.resolveCandidates({
+      observedUrls: [],
+      staticPaths: fresh,
+      streamingAssetsUrl: '',
+      staticResolveBase: (signal ?? '').trim() || STREAMING_ASSETS_SEGMENT,
+      configBaseUrl,
+      maxFiles: remaining,
+    });
+    if (candidates.length === 0) {
+      emit(
+        'warning',
+        DiagnosticCode.UNITY_STREAMING_ASSET_DOWNLOAD_FAILED,
+        'Locally observed StreamingAssets paths resolve to no authorized remote URL',
+        { count: fresh.length },
+      );
+      return [];
+    }
+    return this.downloadStreamingCandidates(
+      candidates,
+      { pkgDir, limits, emit },
+      'StreamingAssets local completion finished',
+      { count: candidates.length },
+    );
+  }
+
+  /**
+   * Policy/SSRF-guarded download of resolved StreamingAssets candidates
+   * into the package tree, with shared limit/completion diagnostics.
+   */
+  private async downloadStreamingCandidates(
+    candidates: Array<{ url: string; path: string }>,
+    ctx: {
+      pkgDir: string;
+      limits: ImportLimits;
+      emit: (
+        level: DiagnosticLevel,
+        code: string,
+        message: string,
+        details?: Record<string, unknown>,
+      ) => void;
+    },
+    completedMessage: string,
+    completedDetails: Record<string, unknown>,
+  ): Promise<{ path: string; sourceUrl: string }[]> {
+    const { pkgDir, limits, emit } = ctx;
+    const svc =
+      this.streamingAssets ??
+      new UnityStreamingAssetsDiscovery(this.downloader, this.policy);
+    const opts = defaultStreamingAssetsOptions();
+    emit(
+      'info',
+      DiagnosticCode.UNITY_STREAMING_ASSETS_DISCOVERY_STARTED,
+      `StreamingAssets discovery: downloading ${candidates.length} file(s)`,
+      { count: candidates.length },
+    );
+    const result = await svc.downloadAll(candidates, {
+      timeoutMs: Math.min(opts.requestTimeoutMs, limits.timeoutMs),
+      maxTotalBytes: Math.min(opts.maxTotalBytes, limits.maxDownloadBytes),
+      writeFile: async (packagePath, bytes) => {
+        const abs = path.join(pkgDir, ...packagePath.split('/'));
+        await fs.promises.mkdir(path.dirname(abs), { recursive: true });
+        await fs.promises.writeFile(abs, bytes);
+      },
+      onEvent: (d) => emit(d.level, d.code, d.message, d.details),
+    });
+    if (result.limitReached) {
+      emit(
+        'warning',
+        DiagnosticCode.UNITY_STREAMING_ASSETS_DISCOVERY_LIMIT_REACHED,
+        'StreamingAssets download cap reached; package may be incomplete',
+        { files: result.files.length, totalBytes: result.totalBytes },
+      );
+    }
+    emit(
+      'info',
+      DiagnosticCode.UNITY_STREAMING_ASSETS_DISCOVERY_COMPLETED,
+      `${completedMessage}: ${result.files.length} file(s), ${result.totalBytes} bytes`,
+      {
+        count: result.files.length,
+        totalBytes: result.totalBytes,
+        ...completedDetails,
+      },
+    );
+    return result.files;
+  }
+
+  /**
    * Fetch an explicitly referenced external script as text for static
    * config scanning (never executed). SourcePolicy is asserted by the
    * discovery stage before this is called; SSRF is enforced in fetchBuffer.
@@ -446,7 +837,9 @@ export class UnityImporter implements GameEngineImporter {
   /**
    * Map resolved absolute asset URLs to packaged relative paths, keyed by
    * known Unity config key. codeUrl/wasmCodeUrl mirror each other so both
-   * loader generations resolve locally.
+   * loader generations resolve locally. streamingAssetsUrl maps to the
+   * local StreamingAssets prefix dir so post-boot bank requests stay
+   * same-origin instead of leaking to the remote source.
    */
   private buildLocalConfigMapping(
     build: UnityBuild,
@@ -478,6 +871,13 @@ export class UnityImporter implements GameEngineImporter {
     }
     if (mapping['wasmCodeUrl'] && !mapping['codeUrl']) {
       mapping['codeUrl'] = mapping['wasmCodeUrl'];
+    }
+    if (build.streamingAssetsUrl) {
+      // Canonical local layout: StreamingAssets dependencies are always
+      // packaged top-level (never nested under remote layout prefixes),
+      // so the config must point there for post-boot requests to stay
+      // same-origin.
+      mapping['streamingAssetsUrl'] = STREAMING_ASSETS_SEGMENT;
     }
     return mapping;
   }

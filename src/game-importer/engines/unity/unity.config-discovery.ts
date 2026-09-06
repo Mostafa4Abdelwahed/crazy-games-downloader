@@ -11,6 +11,7 @@ import {
   UnityLoaderParser,
   classifyUnityArtifact,
 } from './unity.loader-parser';
+import { findStreamingAssetsHint } from './unity.streaming-assets';
 
 /** Where the winning Unity build config was discovered (generic stages). */
 export type UnityConfigSource =
@@ -350,6 +351,22 @@ export class UnityConfigDiscovery {
         );
       }
     }
+    // StreamingAssets is a prefix signal, not a downloadable file: derive
+    // it from any adapter hint at/under the StreamingAssets path (portal
+    // delivery configs expose the directory URL itself). Explicit values
+    // always win; hints only fill absence.
+    if (!build.streamingAssetsUrl) {
+      const hint = findStreamingAssetsHint(adapterAssetUrls);
+      if (hint) {
+        build.streamingAssetsUrl = hint;
+        filled.push('streamingAssetsUrl');
+        collector.info(
+          DiagnosticCode.UNITY_ASSET_URL_RESOLVED,
+          'Unity streamingAssetsUrl filled from adapter asset hint',
+          { field: 'streamingAssetsUrl' },
+        );
+      }
+    }
     if (filled.length > 0) {
       collector.info(
         DiagnosticCode.UNITY_CONFIG_FROM_ADAPTER_HINTS,
@@ -389,6 +406,17 @@ export class UnityConfigDiscovery {
     if (!found) return null;
     // A loader URL alone is not a usable build (nothing to download).
     if (!build.dataUrl && !build.frameworkUrl && !build.codeUrl) return null;
+    // Carry the StreamingAssets prefix signal when hints expose it (a
+    // signal only — never downloaded itself).
+    const streamingHint = findStreamingAssetsHint(adapterAssetUrls);
+    if (streamingHint) {
+      build.streamingAssetsUrl = streamingHint;
+      collector.info(
+        DiagnosticCode.UNITY_ASSET_URL_RESOLVED,
+        'Unity streamingAssetsUrl synthesized from adapter asset hint',
+        { field: 'streamingAssetsUrl' },
+      );
+    }
     collector.info(
       DiagnosticCode.UNITY_CONFIG_FROM_ADAPTER_HINTS,
       'Unity config synthesized from adapter asset hints',

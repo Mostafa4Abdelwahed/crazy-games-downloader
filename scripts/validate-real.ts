@@ -29,6 +29,7 @@ import { UnityLoaderParser } from '../src/game-importer/engines/unity/unity.load
 import { UnityAssetResolver } from '../src/game-importer/engines/unity/unity.asset-resolver';
 import { UnityConfigDiscovery } from '../src/game-importer/engines/unity/unity.config-discovery';
 import { UnityDecompressor } from '../src/game-importer/engines/unity/unity.decompressor';
+import { UnityStreamingAssetsDiscovery } from '../src/game-importer/engines/unity/unity.streaming-assets-discovery';
 import { UnityValidator } from '../src/game-importer/engines/unity/unity.validator';
 import { UnityImporter } from '../src/game-importer/engines/unity/unity.importer';
 import { GenericHtml5Importer } from '../src/game-importer/engines/generic-html5.importer';
@@ -76,6 +77,7 @@ async function main(): Promise<void> {
     new UnityDecompressor(),
     new UnityConfigDiscovery(unityLoaderParser, policy),
     policy,
+    new UnityStreamingAssetsDiscovery(downloader, policy),
   );
   const genericImporter = new GenericHtml5Importer();
   const detector = new CompositeDetector([unityImporter, genericImporter]);

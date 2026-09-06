@@ -32,6 +32,14 @@ export interface InitSnapshot {
   fatalErrors: string[];
   /** Failed requests for Unity runtime artifacts. */
   failedRequired: FailedRuntimeRequest[];
+  /**
+   * Failed SAME-ORIGIN (packaged) requests of any kind — e.g. post-boot
+   * `StreamingAssets/...` bank fetches that 404 after Unity initializes.
+   * Optional for backwards compatibility with existing snapshots.
+   */
+  failedLocal?: FailedRuntimeRequest[];
+  /** FMOD/bank-load failure signature observed (console or page error). */
+  fmodFailed?: boolean;
 }
 
 export interface InitEvaluation {
@@ -51,6 +59,12 @@ export interface RuntimeValidationOptions {
   executablePath?: string;
   /** Entry file inside the package (defaults to manifest.entryFile). */
   entryFile?: string;
+  /**
+   * Post-init settle window in ms (env RUNTIME_VALIDATION_SETTLE_MS,
+   * default 5000): after boot signals pass, keep observing so late
+   * StreamingAssets/bank requests can still fail the run.
+   */
+  settleMs?: number;
 }
 
 export interface RuntimeValidationResult {
@@ -66,6 +80,12 @@ export interface RuntimeValidationResult {
   /** Signal breakdown behind the verdict. */
   signals: InitEvaluation;
   diagnostics: ImportDiagnostic[];
+  /** Same-origin packaged requests that failed (any status >= 400). */
+  failedGameAssets?: FailedRuntimeRequest[];
+  /** Subset of failedGameAssets under a StreamingAssets prefix. */
+  streamingAssetsFailures?: FailedRuntimeRequest[];
+  /** FMOD/bank-load failure signature observed. */
+  fmodFailed?: boolean;
 }
 
 export interface RuntimeValidationInput {
