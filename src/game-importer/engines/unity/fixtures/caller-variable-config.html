@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture Racer (variable config)</title></head>
+<body>
+<canvas id="unity-canvas" width="800" height="600"></canvas>
+<script src="Build/fixture-racer.loader.js"></script>
+<script>
+var config = {
+  dataUrl: "Build/fixture-racer.data",
+  frameworkUrl: "Build/fixture-racer.framework.js",
+  codeUrl: "Build/fixture-racer.wasm",
+  streamingAssetsUrl: "StreamingAssets",
+  companyName: "Fixture Studio"
+};
+</script>
+<script>
+createUnityInstance(document.querySelector("#unity-canvas"), config).then(function (instance) {
+  window.gameInstance = instance;
+});
+</script>
+</body>
+</html>

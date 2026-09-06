@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Pixel Racer</title></head>
+<body>
+<canvas id="unity-canvas" width="960" height="640"></canvas>
+<script src="Build/pixel-racer.loader.js"></script>
+<script>
+createUnityInstance(document.querySelector("#unity-canvas"), {
+  dataUrl: "Build/pixel-racer.data.br",
+  frameworkUrl: "Build/pixel-racer.framework.js.br",
+  codeUrl: "Build/pixel-racer.wasm.br",
+  streamingAssetsUrl: "StreamingAssets",
+  companyName: "Example Studio",
+  productName: "Pixel Racer",
+  productVersion: "2.0.1"
+});
+</script>
+</body>
+</html>

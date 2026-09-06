@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Ninja Run</title></head>
+<body>
+<div id="unity-container">
+<canvas id="unity-canvas"></canvas>
+</div>
+<script src="webgl/Build/ninja-run.loader.js"></script>
+<script>
+var canvas = document.querySelector("#unity-canvas");
+createUnityInstance(canvas, {
+  dataUrl: "webgl/Build/ninja-run.data",
+  frameworkUrl: "webgl/Build/ninja-run.framework.js",
+  codeUrl: "webgl/Build/ninja-run.wasm",
+  streamingAssetsUrl: "webgl/StreamingAssets"
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fixture Racer Game Files</title>
+<link rel="preconnect" href="https://builds.sub.crazygames.com">
+<style>html,body{margin:0;background:#13141E;}</style>
+</head>
+<body>
+<div class="shellLoader" id="shellLoader"><div class="container">Loading…</div></div>
+<script>
+performance.mark('gf:iframe-start');
+function loadScript(url, callback) {
+  var script = document.createElement('script');
+  script.src = url;
+  script.onload = callback;
+  document.head.appendChild(script);
+}
+var options = {"loader":"unity6","loaderOptions":{"showProgress":true,"unityLoaderUrl":"https://files.sub.crazygames.com/fixture-racer/77/Build/fp.loader.js","unityConfigOptions":{"codeUrl":"https://files.sub.crazygames.com/fixture-racer/77/Build/fp.wasm.br","dataUrl":"https://files.sub.crazygames.com/fixture-racer/77/Build/fp.data.br","frameworkUrl":"https://files.sub.crazygames.com/fixture-racer/77/Build/fp.framework.js.br","streamingAssetsUrl":"https://files.sub.crazygames.com/fixture-racer/77/StreamingAssets"}},"gameName":"Fixture Racer","gameSlug":"fixture-racer"};
+loadScript('https://builds.sub.crazygames.com/gameframe/v1/bundle.js', function() {
+  Bootstrapper.load(options);
+});
+</script>
+</body>
+</html>
