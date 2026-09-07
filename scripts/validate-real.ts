@@ -39,6 +39,10 @@ import { CrazyGamesParser } from '../src/game-importer/sources/crazygames/crazyg
 import { CrazyGamesSourceAdapter } from '../src/game-importer/sources/crazygames/crazygames.source';
 import { LocalPackageServer } from '../src/game-importer/runtime/local-package-server';
 import { PlaywrightRuntimeValidator } from '../src/game-importer/runtime/playwright-runtime-validator';
+import {
+  renderFailureSummary,
+  renderSuccessSummary,
+} from '../src/game-importer/runtime/validate-real-summary';
 
 function step(label: string): void {
   // eslint-disable-next-line no-console
@@ -89,6 +93,9 @@ async function main(): Promise<void> {
 
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'validate-real-'));
   const report: Record<string, unknown> = { sourceUrl, workDir };
+  // Package handle for the final summary: set once the importer produces
+  // a package, so failures can still point at it for debugging.
+  let pkg: GamePackage | null = null;
   const fail = (stage: string, err: unknown): never => {
     report.stage = stage;
     report.success = false;
@@ -97,6 +104,8 @@ async function main(): Promise<void> {
       (err as { code?: string })?.code ?? 'IMPORT_FAILED';
     // eslint-disable-next-line no-console
     console.log(JSON.stringify(report, null, 2));
+    // eslint-disable-next-line no-console
+    console.log(renderFailureSummary(pkg?.rootPath ?? null));
     process.exitCode = 1;
     throw new Error('reported');
   };
@@ -143,7 +152,7 @@ async function main(): Promise<void> {
 
     step('importing Unity package');
     const jobDir = path.join(workDir, 'job');
-    const pkg: GamePackage = await unityImporter.import({
+    pkg = await unityImporter.import({
       jobId: 'validate-real',
       sourceUrl: entry.finalUrl,
       workDir: jobDir,
@@ -180,6 +189,21 @@ async function main(): Promise<void> {
     report.success = runtime.success;
     // eslint-disable-next-line no-console
     console.log(JSON.stringify(report, null, 2));
+    if (runtime.success && pkg) {
+      // eslint-disable-next-line no-console
+      console.log(
+        renderSuccessSummary({
+          rootPath: pkg.rootPath,
+          fileCount: pkg.files.length,
+          totalBytes: pkg.manifest.totalBytes,
+          engine: pkg.manifest.engine,
+          runtimeCode: runtime.code,
+        }),
+      );
+    } else if (!runtime.success) {
+      // eslint-disable-next-line no-console
+      console.log(renderFailureSummary(pkg?.rootPath ?? null));
+    }
     process.exitCode = runtime.success ? 0 : 1;
   } catch (err) {
     if (err instanceof Error && err.message === 'reported') return;
