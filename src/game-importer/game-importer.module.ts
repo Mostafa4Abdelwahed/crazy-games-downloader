@@ -2,6 +2,7 @@ import { Module, OnModuleInit } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ImportJobEntity } from './entities/import-job.entity';
 import { GameImportsController } from './game-imports.controller';
+import { ConsoleController } from './console/console.controller';
 import { GameImportsService } from './game-imports.service';
 import { SourcePolicyService } from './core/source-policy';
 import { SecureDownloader } from './core/downloader';
@@ -36,7 +37,7 @@ const SOURCE_ADAPTER_COLLECTION = 'SOURCE_ADAPTER_COLLECTION';
 
 @Module({
   imports: [TypeOrmModule.forFeature([ImportJobEntity])],
-  controllers: [GameImportsController],
+  controllers: [GameImportsController, ConsoleController],
   providers: [
     GameImportsService,
     GameImporterService,

@@ -229,3 +229,14 @@ must add or extend an entry there.
 ## Scripts
 
 `npm run build | start | start:dev | lint | typecheck | test | test:e2e | validate:real`
+
+## Management console
+
+Run the app (`npm run start:dev`, default `http://localhost:3000`) and
+open `/console`: paste a game URL to start an import, watch live
+status/progress, inspect diagnostics and logs, cancel active jobs, and —
+for completed imports — copy the local run instructions
+(`python -m http.server` + `http://localhost:8080` + DevTools checklist).
+The page is dependency-free and calls only the public `/game-imports`
+API; it never executes imported game code. Intended for local operator
+use (same trust boundary as the API itself).

@@ -1,4 +1,12 @@
-import { Body, Controller, Get, HttpCode, Param, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { CreateImportDto } from './dto/create-import.dto';
 import { GameImportsService } from './game-imports.service';
 
@@ -14,6 +22,12 @@ export class GameImportsController {
   @Post()
   create(@Body() dto: CreateImportDto) {
     return this.service.create(dto.sourceUrl);
+  }
+
+  @Get()
+  list(@Query('limit') limit?: string) {
+    const n = limit === undefined ? 50 : Number(limit);
+    return this.service.list(Number.isFinite(n) ? n : 50);
   }
 
   @Get(':id')

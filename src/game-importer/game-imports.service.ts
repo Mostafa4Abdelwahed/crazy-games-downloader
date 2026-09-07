@@ -98,6 +98,19 @@ export class GameImportsService {
     return toJob(e);
   }
 
+  /**
+   * Most-recent jobs first (bounded, for the management console).
+   * Read-only; changes nothing about queueing or processing.
+   */
+  async list(limit = 50): Promise<ImportJob[]> {
+    const cap = Math.min(Math.max(limit, 1), 200);
+    const entities = await this.jobs.find({
+      order: { updatedAt: 'DESC' },
+      take: cap,
+    });
+    return entities.map(toJob);
+  }
+
   async cancel(id: string): Promise<ImportJob> {
     const e = await this.jobs.findOne({ where: { id } });
     if (!e) throw new NotFoundException(`Import job not found: ${id}`);
