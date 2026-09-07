@@ -9,7 +9,9 @@ import {
 /**
  * Unity WebGL detector using multiple weighted signals + confidence scoring.
  * Never relies on a single filename/regex. Supports generic Unity WebGL
- * build layouts (no hardcoded partner-specific names like y8.data).
+ * build layouts (no hardcoded partner-specific names like y8.data) AND
+ * content-hashed builds (e.g. `962b….js` instead of `game.loader.js`)
+ * whose files carry no conventional extensions.
  */
 @Injectable()
 export class UnityDetector {
@@ -111,7 +113,52 @@ export class UnityDetector {
       detail: `${probeHits} probed build artifacts`,
     });
 
+    // Explicit machine-readable Unity delivery manifest: a named loader
+    // URL plus the data/framework/code config triple, in Unity's own
+    // delivery vocabulary. Decisive (not a filename guess) — portals emit
+    // it exactly when the payload is a Unity build.
+    const hasLoaderDecl =
+      has(/unityloaderurl/i) || has(/"loader"\s*:\s*"unity/i);
+    const hasConfigTriple =
+      has(/dataurl/i) &&
+      has(/frameworkurl/i) &&
+      (has(/codeurl/i) || has(/wasmcodeurl/i) || has(/wasmurl/i));
+    const manifestMatched =
+      has(/unityconfigoptions/i) && hasLoaderDecl && hasConfigTriple;
+    signals.push({
+      name: 'unity-delivery-manifest',
+      weight: 5,
+      matched: manifestMatched,
+      detail: 'explicit Unity delivery manifest (loader URL + config triple)',
+    });
+
+    // Content-hashed Unity build layout: multiple long-hex asset names
+    // with Unity artifact extensions (Brotli variants included). Hashed
+    // names alone prove nothing — but alongside other Unity evidence they
+    // confirm the modern hashed-build layout (`962b….wasm.br` et al.).
+    const hashedHits = allNames.filter((n) =>
+      /(^|\/)[0-9a-f]{16,}\.(js|wasm|data)(\.br)?$/i.test(n),
+    );
+    const hashedHasBinary = hashedHits.some((n) =>
+      /\.(wasm|data)(\.br)?$/i.test(n),
+    );
+    signals.push({
+      name: 'hashed-unity-build',
+      weight: 2,
+      matched: hashedHits.length >= 2 && hashedHasBinary,
+      detail: `${hashedHits.length} content-hashed build assets`,
+    });
+
     const confidence = scoreSignals(signals);
-    return { engine: 'unity', confidence, signals };
+    return {
+      engine: 'unity',
+      // A conclusive delivery manifest is evidence of a different kind
+      // than filename guessing: the delivery layer explicitly declares a
+      // Unity payload (loader + full config triple). Floor the confidence
+      // so overwhelmingly explicit evidence is never outvoted by absent
+      // filename patterns. Anything less still scores purely additively.
+      confidence: manifestMatched ? Math.max(confidence, 0.85) : confidence,
+      signals,
+    };
   }
 }

@@ -9,6 +9,7 @@ import {
   SourceRedirectedError,
 } from '../source.interface';
 import { CrazyGamesParser, isCrazyGamesHost } from './crazygames.parser';
+import { UnityBuildRoleUrls } from '../source.interface';
 
 const ADAPTER_NAME = 'crazygames';
 
@@ -126,6 +127,7 @@ export class CrazyGamesSourceAdapter implements GameSourceAdapter {
     for (const u of deliveryAssets) {
       if (!assetUrls.includes(u)) assetUrls.push(u);
     }
+    const unityBuild = toUnityBuildRoles(delivery?.loaderUrl, delivery);
 
     return {
       source: this.name,
@@ -133,7 +135,55 @@ export class CrazyGamesSourceAdapter implements GameSourceAdapter {
       gameUrl: frameUrl,
       entryUrl: frame.finalUrl,
       assetUrls,
+      ...(unityBuild ? { unityBuild } : {}),
       ...(metadata ? { metadata } : {}),
     };
   }
+}
+
+/**
+ * Map portal delivery URLs to role-labeled Unity build hints (platform
+ * knowledge stays here; keys/values are engine-vocabulary + URLs only).
+ * Accepts absolute http(s) URLs and scheme-less relative refs (resolved
+ * later against the build base); refuses anything else. Returns undefined
+ * when the delivery config names no labeled build.
+ */
+function toUnityBuildRoles(
+  loaderUrl: string | undefined,
+  delivery: { buildRoles: Record<string, string> } | undefined,
+): UnityBuildRoleUrls | undefined {
+  const roles: UnityBuildRoleUrls = {};
+  const take = (field: keyof UnityBuildRoleUrls, raw: unknown): void => {
+    if (typeof raw !== 'string') return;
+    const v = raw.trim();
+    if (!v || v.length > 2000) return;
+    try {
+      const parsed = new URL(v);
+      if (!['http:', 'https:'].includes(parsed.protocol)) return;
+      roles[field] = parsed.toString();
+      return;
+    } catch {
+      /* not absolute — maybe a scheme-less relative ref */
+    }
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(v)) return;
+    if (/[\s"'<>\\]/.test(v)) return;
+    roles[field] = v;
+  };
+  if (loaderUrl) take('loaderUrl', loaderUrl);
+  const keyed = delivery?.buildRoles ?? {};
+  // `wasmUrl` is an accepted alias of the wasm code URL.
+  for (const k of ['codeUrl', 'wasmCodeUrl', 'wasmUrl'] as const) {
+    if (roles.codeUrl) break;
+    if (keyed[k]) take('codeUrl', keyed[k]);
+  }
+  for (const k of [
+    'dataUrl',
+    'frameworkUrl',
+    'streamingAssetsUrl',
+    'memoryUrl',
+    'symbolsUrl',
+  ] as const) {
+    if (keyed[k] && roles[k] === undefined) take(k, keyed[k]);
+  }
+  return Object.keys(roles).length > 0 ? roles : undefined;
 }

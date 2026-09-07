@@ -36,6 +36,13 @@ export interface CrazyGamesDeliveryConfig {
   loaderUrl?: string;
   /** Build asset URLs from the delivery config's Unity options. */
   configAssets: string[];
+  /**
+   * Keyed Unity option values (`dataUrl`, `frameworkUrl`, `codeUrl`,
+   * `streamingAssetsUrl`, …) as exposed by the delivery config. Absolute
+   * http(s) URLs or scheme-less relative refs; the adapter maps these to
+   * role-labeled engine hints. Empty when the config names no options.
+   */
+  buildRoles: Record<string, string>;
 }
 
 export interface CrazyGamesFrameAssets {

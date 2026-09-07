@@ -12,6 +12,7 @@ import {
   classifyUnityArtifact,
 } from './unity.loader-parser';
 import { findStreamingAssetsHint } from './unity.streaming-assets';
+import { UnityBuildRoleUrls } from '../../sources/source.interface';
 
 /** Where the winning Unity build config was discovered (generic stages). */
 export type UnityConfigSource =
@@ -39,6 +40,13 @@ export interface ConfigDiscoveryInput {
   /** Absolute http(s) asset hints from the source adapter (generic). */
   adapterAssetUrls?: string[];
   /**
+   * Role-labeled Unity build URLs from the adapter delivery config
+   * (explicit semantics: no extension guessing needed). Explicit
+   * page-embedded values always win; roles only fill absence and seed
+   * synthesis. Never carries platform-specific structures.
+   */
+  adapterBuild?: UnityBuildRoleUrls;
+  /**
    * Policy/SSRF-guarded text fetcher for explicit external script refs,
    * provided by the importer (owns downloader + limits).
    */
@@ -56,6 +64,8 @@ const MAX_ADAPTER_HINTS = 200;
  *   A. Explicit config literals in the loader text itself.
  *   B. Static `createUnityInstance(...)` config in the caller document
  *      (inline scripts, then explicitly referenced external scripts).
+ *   B3. Role-labeled adapter build URLs (explicit delivery semantics —
+ *      content-hashed builds included, no extension guessing).
  *   C. Explicit adapter asset URLs mapped by artifact kind (fills gaps).
  *   D. Fail closed with UNITY_CONFIG_NOT_FOUND.
  *
@@ -82,6 +92,7 @@ export class UnityConfigDiscovery {
         fromLoader,
         input.adapterAssetUrls ?? [],
         collector,
+        input.adapterBuild,
       );
       return {
         build: merged,
@@ -116,6 +127,7 @@ export class UnityConfigDiscovery {
         toBuild(caller.raw),
         input.adapterAssetUrls ?? [],
         collector,
+        input.adapterBuild,
       );
       return {
         build: merged,
@@ -133,6 +145,7 @@ export class UnityConfigDiscovery {
         toBuild(external.raw),
         input.adapterAssetUrls ?? [],
         collector,
+        input.adapterBuild,
       );
       return {
         build: merged,
@@ -143,10 +156,29 @@ export class UnityConfigDiscovery {
       };
     }
 
+    // B3. Role-labeled adapter build (explicit delivery semantics).
+    const fromRoles = this.buildFromRoles(input.adapterBuild, collector);
+    if (fromRoles) {
+      const merged = this.fillFromAdapterHints(
+        fromRoles,
+        input.adapterAssetUrls ?? [],
+        collector,
+        input.adapterBuild,
+      );
+      return {
+        build: merged,
+        raw: rawOf(merged),
+        source: 'adapter-hints',
+        configBaseUrl: input.loaderUrl,
+        diagnostics: collector.all(),
+      };
+    }
+
     // C. Adapter hints alone (no explicit config anywhere).
     const synthesized = this.synthesizeFromAdapterHints(
       input.adapterAssetUrls ?? [],
       collector,
+      input.adapterBuild,
     );
     if (synthesized) {
       return {
@@ -312,15 +344,99 @@ export class UnityConfigDiscovery {
   }
 
   /**
+   * Build a config purely from role-labeled adapter URLs (explicit
+   * delivery semantics — works for content-hashed builds whose filenames
+   * carry no conventional extensions). Requires at least one downloadable
+   * asset role (data/framework/wasm family); a loader URL alone is not a
+   * usable build. Relative values are kept raw for base-resolution by the
+   * asset resolver; non-http(s) absolute values are refused.
+   */
+  private buildFromRoles(
+    roles: UnityBuildRoleUrls | undefined,
+    collector: DiagnosticCollector,
+  ): UnityBuild | null {
+    if (!roles) return null;
+    const build: UnityBuild = { loaderUrl: '' };
+    const filled = this.applyRoles(build, roles, collector, 'labeled');
+    const usable =
+      filled.includes('dataUrl') ||
+      filled.includes('frameworkUrl') ||
+      filled.includes('codeUrl');
+    if (!usable) return null;
+    collector.info(
+      DiagnosticCode.UNITY_CONFIG_FROM_ADAPTER_HINTS,
+      'Unity config resolved from role-labeled adapter build URLs',
+      { fields: filled },
+    );
+    return build;
+  }
+
+  /**
+   * Copy role-labeled URLs into a build. Explicit values always win —
+   * only absent fields are filled. Returns the filled field names.
+   */
+  private applyRoles(
+    build: UnityBuild,
+    roles: UnityBuildRoleUrls | undefined,
+    collector: DiagnosticCollector,
+    how: 'labeled' | 'gap-fill',
+  ): string[] {
+    if (!roles) return [];
+    const filled: string[] = [];
+    const take = (
+      field:
+        | 'loaderUrl'
+        | 'dataUrl'
+        | 'frameworkUrl'
+        | 'codeUrl'
+        | 'streamingAssetsUrl'
+        | 'memoryUrl'
+        | 'symbolsUrl',
+    ): void => {
+      const current = (build as unknown as Record<string, string>)[field];
+      if (current) return;
+      if (field === 'codeUrl' && build.wasmCodeUrl) return;
+      const raw = roles[field];
+      if (typeof raw !== 'string') return;
+      const v = raw.trim();
+      if (!v) return;
+      // Absolute values must be http(s); relative refs are kept raw for
+      // base-resolution downstream.
+      if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(v)) {
+        if (!/^https?:/i.test(v)) return;
+      }
+      (build as unknown as Record<string, string>)[field] = v;
+      filled.push(field);
+      collector.info(
+        DiagnosticCode.UNITY_ASSET_URL_RESOLVED,
+        `Unity ${field} resolved from role-${how} adapter build URL`,
+        { field },
+      );
+    };
+    take('loaderUrl');
+    take('dataUrl');
+    take('frameworkUrl');
+    take('codeUrl');
+    take('streamingAssetsUrl');
+    take('memoryUrl');
+    take('symbolsUrl');
+    return filled;
+  }
+
+  /**
    * Fill config gaps from explicit adapter asset URLs by artifact kind.
-   * Explicit (loader/caller) values always win; hints only fill absence.
+   * Explicit (loader/caller) values always win; role-labeled URLs win
+   * over extension guessing; hints only fill absence.
    */
   private fillFromAdapterHints(
     build: UnityBuild,
     adapterAssetUrls: string[],
     collector: DiagnosticCollector,
+    roles?: UnityBuildRoleUrls,
   ): UnityBuild {
     const filled: string[] = [];
+    const filledByRoles = this.applyRoles(build, roles, collector, 'labeled');
+    filled.push(...filledByRoles);
     const take = (
       field: 'dataUrl' | 'frameworkUrl' | 'codeUrl',
       kind: 'data' | 'framework' | 'wasm',
@@ -381,13 +497,24 @@ export class UnityConfigDiscovery {
   private synthesizeFromAdapterHints(
     adapterAssetUrls: string[],
     collector: DiagnosticCollector,
+    roles?: UnityBuildRoleUrls,
   ): UnityBuild | null {
     const build: UnityBuild = { loaderUrl: '' };
     let found = false;
+    const seed = this.applyRoles(build, roles, collector, 'labeled');
+    if (
+      seed.includes('dataUrl') ||
+      seed.includes('frameworkUrl') ||
+      seed.includes('codeUrl')
+    ) {
+      found = true;
+    }
     const take = (
       field: 'loaderUrl' | 'dataUrl' | 'frameworkUrl' | 'codeUrl',
       kind: 'loader' | 'framework' | 'wasm' | 'data',
     ): void => {
+      // Role-seeded values always win over extension guessing.
+      if ((build as unknown as Record<string, string>)[field]) return;
       const hit = firstHintOfKind(adapterAssetUrls, kind);
       if (hit) {
         (build as unknown as Record<string, string>)[field] = hit;
@@ -409,7 +536,7 @@ export class UnityConfigDiscovery {
     // Carry the StreamingAssets prefix signal when hints expose it (a
     // signal only — never downloaded itself).
     const streamingHint = findStreamingAssetsHint(adapterAssetUrls);
-    if (streamingHint) {
+    if (streamingHint && !build.streamingAssetsUrl) {
       build.streamingAssetsUrl = streamingHint;
       collector.info(
         DiagnosticCode.UNITY_ASSET_URL_RESOLVED,

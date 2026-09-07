@@ -137,8 +137,23 @@ export class UnityValidator {
       return kindsInInventory.has(kind);
     };
     const missing: string[] = [];
-    if (need('loader') && !names.some((n) => n.endsWith('.loader.js'))) {
-      missing.push('*.loader.js');
+    // Loader: `*.loader.js` is the conventional name, but content-hashed
+    // builds ship hash-named bundles (e.g. `962b….js`). In that case the
+    // entry's own loader `<script src>` must resolve to a packaged file —
+    // the page, not the filename, decides what the loader is.
+    const hasConventionalLoader = names.some((n) => n.endsWith('.loader.js'));
+    if (need('loader') && !hasConventionalLoader) {
+      // NOTE: entry resolution is duplicated from section 4 (which runs
+      // later) because the loader requirement is checked first.
+      const entryKey = names.includes('index.html')
+        ? 'index.html'
+        : names.find((n) => n.endsWith('/index.html'));
+      if (
+        !entryKey ||
+        !this.entryReferencesPackagedScript(pkg, entryKey, byPath)
+      ) {
+        missing.push('*.loader.js');
+      }
     }
     if (need('framework') && !names.some((n) => n.endsWith('.framework.js'))) {
       missing.push('*.framework.js');
@@ -226,6 +241,58 @@ export class UnityValidator {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * True when the entry document references at least one local `.js` file
+   * that exists in the package inventory. Used for hash-named loader
+   * bundles: the entry's script tag (which the importer itself rewrote to
+   * the packaged path) is the authority, not the filename. Reads the
+   * on-disk entry when available, else falls back to inventory-only
+   * reasoning (any packaged `Build/*.js`). Never reads outside the
+   * package root.
+   */
+  private entryReferencesPackagedScript(
+    pkg: GamePackage,
+    entryName: string,
+    byPath: Map<string, (typeof pkg.files)[number]>,
+  ): boolean {
+    const hasJs = (rel: string): boolean => {
+      const key = rel.toLowerCase();
+      if (!key.endsWith('.js')) return false;
+      return (
+        byPath.has(key) || byPath.has(`build/${key.replace(/^build\//, '')}`)
+      );
+    };
+    try {
+      if (pkg.rootPath && this.dirExists(pkg.rootPath)) {
+        const abs = path.join(pkg.rootPath, ...entryName.split('/'));
+        const rootNorm = path.normalize(pkg.rootPath);
+        const absNorm = path.normalize(abs);
+        if (
+          (absNorm === rootNorm || absNorm.startsWith(rootNorm + path.sep)) &&
+          fs.statSync(absNorm).isFile()
+        ) {
+          const html = fs.readFileSync(absNorm, 'utf8').slice(0, 500_000);
+          const re = /<script[^>]+src\s*=\s*["']([^"']+)["']/gi;
+          let m: RegExpExecArray | null;
+          while ((m = re.exec(html)) !== null) {
+            const ref = (m[1] ?? '').trim();
+            if (!ref || ref.startsWith('#')) continue;
+            if (/^(data|blob|about|javascript):/i.test(ref)) continue;
+            if (/^https?:\/\//i.test(ref)) continue;
+            if (ref.startsWith('/') || ref.includes('..')) continue;
+            if (hasJs(path.posix.normalize(ref))) return true;
+          }
+          return false;
+        }
+      }
+    } catch {
+      /* fall through to inventory-only reasoning */
+    }
+    return [...byPath.keys()].some(
+      (k) => k.endsWith('.js') && (k.startsWith('build/') || !k.includes('/')),
+    );
   }
 
   /** Verify index.html's local refs exist in the package; flag externals. */

@@ -138,10 +138,16 @@ export class CrazyGamesParser {
   extractDeliveryConfig(html: string): CrazyGamesDeliveryConfig {
     const frameUrls: string[] = [];
     const configAssets: string[] = [];
+    const buildRoles: Record<string, string> = {};
     let loaderUrl: string | undefined;
     const push = (arr: string[], raw: string): void => {
       const abs = normalizeDeliveryUrl(raw);
       if (abs && !arr.includes(abs)) arr.push(abs);
+    };
+    const pushRole = (key: string, raw: string): void => {
+      if (key in buildRoles) return;
+      const role = roleValue(raw);
+      if (role) buildRoles[key] = role;
     };
 
     const blob = this.nextDataBlob(html);
@@ -154,11 +160,17 @@ export class CrazyGamesParser {
           if (abs) loaderUrl = abs;
         }
         for (const u of found.configAssets) push(configAssets, u);
+        for (const [k, v] of Object.entries(found.buildRoles)) pushRole(k, v);
       } catch {
         // Malformed blob — fall through to regex extraction below.
       }
     }
-    if (frameUrls.length === 0 && !loaderUrl && configAssets.length === 0) {
+    if (
+      frameUrls.length === 0 &&
+      !loaderUrl &&
+      configAssets.length === 0 &&
+      Object.keys(buildRoles).length === 0
+    ) {
       const fallback = regexDeliveryConfig(html.slice(0, 2_000_000));
       for (const u of fallback.frameUrls) push(frameUrls, u);
       if (fallback.loaderUrl) {
@@ -166,11 +178,13 @@ export class CrazyGamesParser {
         if (abs) loaderUrl = abs;
       }
       for (const u of fallback.configAssets) push(configAssets, u);
+      for (const [k, v] of Object.entries(fallback.buildRoles)) pushRole(k, v);
     }
     return {
       frameUrls,
       ...(loaderUrl ? { loaderUrl } : {}),
       configAssets,
+      buildRoles,
     };
   }
 
@@ -290,6 +304,7 @@ interface RawDeliveryHits {
   frameUrls: string[];
   loaderUrl?: string;
   configAssets: string[];
+  buildRoles: Record<string, string>;
 }
 
 /**
@@ -302,7 +317,11 @@ function searchDeliveryKeys(
   depth = 0,
   seen?: { nodes: number },
 ): RawDeliveryHits {
-  const out: RawDeliveryHits = { frameUrls: [], configAssets: [] };
+  const out: RawDeliveryHits = {
+    frameUrls: [],
+    configAssets: [],
+    buildRoles: {},
+  };
   const state = seen ?? { nodes: 0 };
   if (depth > 8 || state.nodes > 2000 || data === null) return out;
   if (Array.isArray(data)) {
@@ -335,6 +354,7 @@ function searchDeliveryKeys(
       )) {
         if (UNITY_OPTION_KEYS.includes(optKey) && typeof optVal === 'string') {
           out.configAssets.push(optVal);
+          if (!(optKey in out.buildRoles)) out.buildRoles[optKey] = optVal;
         }
       }
     } else if (typeof value === 'object' && value !== null) {
@@ -354,11 +374,34 @@ function mergeHits(into: RawDeliveryHits, from: RawDeliveryHits): void {
   for (const u of from.configAssets) {
     if (!into.configAssets.includes(u)) into.configAssets.push(u);
   }
+  for (const [k, v] of Object.entries(from.buildRoles)) {
+    if (!(k in into.buildRoles)) into.buildRoles[k] = v;
+  }
+}
+
+/**
+ * Normalize a delivery-config option value into a role-labeled engine hint:
+ * absolute http(s) URLs stay absolute, scheme-relative (`//host/…`) gains
+ * `https:`, and scheme-less relative refs are kept raw for later
+ * base-resolution by the engine importer. Anything else is refused.
+ */
+function roleValue(raw: string): string | null {
+  const v = raw.replace(/\\\//g, '/').trim();
+  if (!v || v.length > 2000) return null;
+  const abs = normalizeDeliveryUrl(v);
+  if (abs) return abs;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(v)) return null;
+  if (/[\s"'<>\\]/.test(v)) return null;
+  return v;
 }
 
 /** Targeted regex fallback for the same semantic key names. */
 function regexDeliveryConfig(html: string): RawDeliveryHits {
-  const out: RawDeliveryHits = { frameUrls: [], configAssets: [] };
+  const out: RawDeliveryHits = {
+    frameUrls: [],
+    configAssets: [],
+    buildRoles: {},
+  };
   const urlGroup = '"((?:https?:)?//[^"]+)"';
   for (const key of ['desktopUrl', 'mobileUrl']) {
     const re = new RegExp(`"${key}"\\s*:\\s*${urlGroup}`, 'g');
@@ -370,11 +413,24 @@ function regexDeliveryConfig(html: string): RawDeliveryHits {
   if (loaderMatch) out.loaderUrl = loaderMatch[1];
   const optionsBlock = html.match(/"unityConfigOptions"\s*:\s*\{([^{}]*)\}/);
   if (optionsBlock) {
-    const keyAlt = UNITY_OPTION_KEYS.join('|');
-    const re = new RegExp(`"(?:${keyAlt})"\\s*:\\s*${urlGroup}`, 'g');
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(optionsBlock[1])) !== null) {
-      out.configAssets.push(m[1]);
+    // Per-key capture (not alternation): keeps the semantic role of each
+    // value and also accepts scheme-less relative refs (e.g. a bare
+    // "StreamingAssets" prefix) that the absolute-URL pattern would miss.
+    for (const key of UNITY_OPTION_KEYS) {
+      const re = new RegExp(`"${key}"\\s*:\\s*"([^"]{1,2000})"`, 'g');
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(optionsBlock[1])) !== null) {
+        const raw = (m[1] ?? '').replace(/\\\//g, '/').trim();
+        if (!raw) continue;
+        const abs = normalizeDeliveryUrl(raw);
+        if (abs && !out.configAssets.includes(abs)) {
+          out.configAssets.push(abs);
+        }
+        if (!(key in out.buildRoles)) {
+          const role = roleValue(raw);
+          if (role) out.buildRoles[key] = role;
+        }
+      }
     }
   }
   return out;

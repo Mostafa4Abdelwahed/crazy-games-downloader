@@ -36,6 +36,14 @@ export interface ResolvedGameSource {
   entryUrl?: string;
   /** Absolute http(s) asset URLs exposed to the browser. Hints only. */
   assetUrls: string[];
+  /**
+   * Optional role-labeled Unity build URLs from the platform's explicit
+   * delivery configuration (e.g. a named loader bundle plus Unity config
+   * options). Platform-agnostic: keys are Unity vocabulary, values are
+   * URLs. Lets the Unity importer accept content-hashed builds without
+   * filename guessing. Absent when the platform exposes no labeled build.
+   */
+  unityBuild?: UnityBuildRoleUrls;
   metadata?: {
     title?: string;
     thumbnail?: string;
@@ -54,6 +62,24 @@ export interface GameSourceAdapter {
    * restrictions. Only plain fetches of public delivery configuration.
    */
   resolve(url: string, context: SourceContext): Promise<ResolvedGameSource>;
+}
+
+/**
+ * Role-labeled Unity build URLs from a platform delivery configuration.
+ * Keys are Unity's own config vocabulary (engine knowledge, NOT platform
+ * concepts); values are absolute http(s) URLs or scheme-less relative refs
+ * resolved later against the build base. Roles let engine importers accept
+ * content-hashed builds (e.g. `962b…​.js` instead of `game.loader.js`)
+ * without filename guessing — explicit semantics beat pattern matching.
+ */
+export interface UnityBuildRoleUrls {
+  loaderUrl?: string;
+  dataUrl?: string;
+  frameworkUrl?: string;
+  codeUrl?: string;
+  streamingAssetsUrl?: string;
+  memoryUrl?: string;
+  symbolsUrl?: string;
 }
 
 export class UnsupportedSourceLayoutError extends Error {

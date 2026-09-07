@@ -114,16 +114,29 @@ export class UnityImporter implements GameEngineImporter {
     const html = entry.body.toString('utf8').slice(0, 1_000_000);
     const baseUrl = entry.finalUrl;
 
-    // 2. Discover loader scripts: static <script src> first, then explicit
-    //    adapter asset hints matching the loader artifact pattern (M3.1 —
-    //    JS-bootstrapped frames expose no static script tag). No filename
-    //    guessing: only already-discovered explicit URLs are eligible.
+    // 2. Discover loader scripts: static <script src> first, then the
+    //    role-labeled adapter loader URL (explicit delivery semantics —
+    //    content-hashed builds included), then adapter asset hints matching
+    //    the loader artifact pattern (M3.1 — JS-bootstrapped frames expose
+    //    no static script tag). No filename guessing: only
+    //    already-discovered explicit URLs are eligible.
     const candidates = this.parser.findLoaderScriptUrls(html);
     const loaderRefs = candidates.filter((u) =>
       u.toLowerCase().includes('loader'),
     );
     let loaderRef = loaderRefs[0] ?? candidates[0];
     let loaderFromHints = false;
+    const roleLoader = context.resolvedSource?.unityBuild?.loaderUrl?.trim();
+    if (!loaderRef && roleLoader) {
+      loaderRef = roleLoader;
+      loaderFromHints = true;
+      emit(
+        'info',
+        DiagnosticCode.UNITY_LOADER_FOUND,
+        'Unity loader resolved from role-labeled adapter build URL (no static script tag)',
+        { url: safeUrlForLog(roleLoader) },
+      );
+    }
     if (!loaderRef) {
       const hinted = findLoaderUrlInHints(
         context.resolvedSource?.assetUrls ?? [],
@@ -161,7 +174,8 @@ export class UnityImporter implements GameEngineImporter {
 
     // 3. Download loader + multi-source config discovery (M3.1).
     // Priority: loader literals -> caller document -> external scripts ->
-    // adapter hints -> fail closed with UNITY_CONFIG_NOT_FOUND.
+    // role-labeled adapter build -> adapter hints -> fail closed with
+    // UNITY_CONFIG_NOT_FOUND.
     const loaderRes = await this.downloader.fetchBuffer(loaderUrl, {
       timeoutMs: Math.min(30_000, limits.timeoutMs),
       maxBytes: limits.maxDownloadBytes,
@@ -174,6 +188,7 @@ export class UnityImporter implements GameEngineImporter {
       entryHtml: html,
       entryUrl: baseUrl,
       adapterAssetUrls: context.resolvedSource?.assetUrls,
+      adapterBuild: context.resolvedSource?.unityBuild,
       fetchExternalScript: (url) => this.fetchExternalScriptText(url, limits),
     });
     for (const d of discovered.diagnostics)
@@ -199,8 +214,10 @@ export class UnityImporter implements GameEngineImporter {
     }
 
     // 4. Download all assets (loader + resolved + adapter hints matching
-    // Unity build artifacts, deduped). Adapter hints only ever ADD known
-    // engine artifacts; they never change config parsing.
+    // Unity build artifacts + role-labeled adapter build URLs, deduped).
+    // Adapter hints only ever ADD known engine artifacts or explicitly
+    // labeled build URLs; they never change config parsing. Every URL is
+    // SourcePolicy-gated at download (requested and final URL).
     const hinted = (context.resolvedSource?.assetUrls ?? []).filter((u) =>
       this.isUnityArtifactUrl(u),
     );
@@ -209,6 +226,34 @@ export class UnityImporter implements GameEngineImporter {
       if (!seen.has(h)) {
         seen.add(h);
         urls.push(h);
+      }
+    }
+    const roles = context.resolvedSource?.unityBuild;
+    if (roles) {
+      const roleFiles = [
+        roles.dataUrl,
+        roles.frameworkUrl,
+        roles.codeUrl,
+        roles.memoryUrl,
+        roles.symbolsUrl,
+      ];
+      for (const raw of roleFiles) {
+        if (typeof raw !== 'string' || !raw.trim()) continue;
+        let abs: string;
+        try {
+          abs = new URL(raw.trim(), discovered.configBaseUrl).toString();
+        } catch {
+          continue;
+        }
+        if (!/^https?:/i.test(abs) || seen.has(abs)) continue;
+        seen.add(abs);
+        urls.push(abs);
+        emit(
+          'info',
+          DiagnosticCode.UNITY_ASSET_URL_RESOLVED,
+          'Queued role-labeled adapter build asset for download',
+          { url: safeUrlForLog(abs) },
+        );
       }
     }
     const allUrls = [loaderUrl, ...urls];
@@ -223,29 +268,6 @@ export class UnityImporter implements GameEngineImporter {
     const loaderRawPath = path.join(rawDir, loaderFileName);
     await fs.promises.writeFile(loaderRawPath, loaderRes.body);
     downloaded.push({ url: loaderUrl, filePath: loaderRawPath });
-    // Localize an embedded streamingAssetsUrl literal in the packaged
-    // loader (narrow, known-key-only rewrite): an absolute remote value
-    // would otherwise keep post-boot bank requests on the remote origin
-    // instead of the self-contained package. Generic loaders without a
-    // literal are untouched.
-    if (resolved.streamingAssetsUrl) {
-      try {
-        const localized = this.resolver.rewriteKnownConfigRefs(loaderJs, {
-          streamingAssetsUrl: STREAMING_ASSETS_SEGMENT,
-        });
-        if (localized !== loaderJs) {
-          await fs.promises.writeFile(loaderRawPath, localized, 'utf8');
-          emit(
-            'info',
-            DiagnosticCode.UNITY_ASSET_URL_RESOLVED,
-            'Localized streamingAssetsUrl in packaged loader',
-            { field: 'streamingAssetsUrl' },
-          );
-        }
-      } catch {
-        /* keep the original loader bytes on any rewrite failure */
-      }
-    }
     done++;
     await report({ downloadedFiles: done });
 
@@ -346,6 +368,19 @@ export class UnityImporter implements GameEngineImporter {
       localByUrl.set(d.url, `Build/${path.basename(d.filePath)}`);
     }
     const localConfig = this.buildLocalConfigMapping(resolved, localByUrl);
+
+    // Localize embedded config literals in the packaged loader (narrow,
+    // known-key-only rewrite): a loader carrying absolute remote asset
+    // URLs (content-hashed builds sometimes do) would otherwise keep
+    // post-boot requests on the remote origin instead of the
+    // self-contained package. Generic loaders without literals are
+    // untouched; only keys pointing at files we downloaded are rewritten.
+    await this.localizePackagedLoader(
+      loaderRawPath,
+      loaderJs,
+      localConfig,
+      emit,
+    );
 
     let safeHtml: string;
     if (loaderFromHints) {
@@ -792,6 +827,53 @@ export class UnityImporter implements GameEngineImporter {
       },
     );
     return result.files;
+  }
+
+  /**
+   * Rewrite known Unity config literals inside the packaged loader copy
+   * to their local package paths (see {@link buildLocalConfigMapping}).
+   * Static only, known keys only, downloaded files only. Generic loaders
+   * without embedded literals are byte-identical afterwards.
+   */
+  private async localizePackagedLoader(
+    loaderRawPath: string,
+    loaderJs: string,
+    localConfig: Record<string, string>,
+    emit: (
+      level: DiagnosticLevel,
+      code: string,
+      message: string,
+      details?: Record<string, unknown>,
+    ) => void,
+  ): Promise<void> {
+    const allowed = new Set([
+      'dataUrl',
+      'frameworkUrl',
+      'codeUrl',
+      'wasmCodeUrl',
+      'streamingAssetsUrl',
+      'memoryUrl',
+      'symbolsUrl',
+    ]);
+    const mapping: Record<string, string> = {};
+    for (const [k, v] of Object.entries(localConfig)) {
+      if (allowed.has(k) && v) mapping[k] = v;
+    }
+    if (Object.keys(mapping).length === 0) return;
+    try {
+      const localized = this.resolver.rewriteKnownConfigRefs(loaderJs, mapping);
+      if (localized !== loaderJs) {
+        await fs.promises.writeFile(loaderRawPath, localized, 'utf8');
+        emit(
+          'info',
+          DiagnosticCode.UNITY_ASSET_URL_RESOLVED,
+          'Localized embedded config literals in packaged loader',
+          { fields: Object.keys(mapping) },
+        );
+      }
+    } catch {
+      /* keep the original loader bytes on any rewrite failure */
+    }
   }
 
   /**
