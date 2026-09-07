@@ -2,7 +2,34 @@ import {
   formatBytes,
   renderFailureSummary,
   renderSuccessSummary,
+  resolveValidateRealUrl,
 } from './validate-real-summary';
+
+describe('validate-real URL resolution', () => {
+  it('prefers the CLI argument over the env var', () => {
+    expect(
+      resolveValidateRealUrl(
+        ['node', 'validate-real.ts', 'https://example.com/game/a'],
+        { REAL_TEST_SOURCE_URL: 'https://example.com/game/b' },
+      ),
+    ).toBe('https://example.com/game/a');
+  });
+
+  it('falls back to the env var without an argument', () => {
+    expect(
+      resolveValidateRealUrl(['node', 'validate-real.ts'], {
+        REAL_TEST_SOURCE_URL: 'https://example.com/game/b',
+      }),
+    ).toBe('https://example.com/game/b');
+  });
+
+  it('returns null when neither is provided', () => {
+    expect(resolveValidateRealUrl(['node', 'validate-real.ts'], {})).toBeNull();
+    expect(
+      resolveValidateRealUrl(['node', 'validate-real.ts', '   '], {}),
+    ).toBeNull();
+  });
+});
 
 describe('validate-real summary', () => {
   it('formats byte sizes', () => {

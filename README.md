@@ -219,6 +219,13 @@ REAL_TEST_SOURCE_URL=https://www.crazygames.com/game/<slug> npm run validate:rea
   bank/asset 404s and FMOD failures report `RUNTIME_ERROR` instead of a
   premature `RUNTIME_OK`.
 
+## Error playbook
+
+Known console/runtime failure patterns live in `docs/error-playbook.md`
+(symptom → cause → fix → verification). Check it FIRST before
+investigating any new downloaded-game failure; every solved investigation
+must add or extend an entry there.
+
 ## Scripts
 
 `npm run build | start | start:dev | lint | typecheck | test | test:e2e | validate:real`

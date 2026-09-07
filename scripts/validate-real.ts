@@ -1,8 +1,10 @@
 /**
  * Opt-in real-world validation (M3).
  *
- * Usage:
+ * Usage (pick one):
+ *   npm run validate:real -- https://<authorized-game-url>
  *   REAL_TEST_SOURCE_URL=https://<authorized-game-url> npm run validate:real
+ *   npm run validate:real            (prompts for the URL interactively)
  *
  * Requires explicit authorization to import and redistribute the tested game.
  * The URL must ALSO satisfy SourcePolicy (SOURCE_ALLOWED_HOSTS) and all
@@ -16,6 +18,7 @@ import 'reflect-metadata';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as readline from 'node:readline';
 import { SourcePolicyService } from '../src/game-importer/core/source-policy';
 import { SecureDownloader } from '../src/game-importer/core/downloader';
 import { CompositeDetector } from '../src/game-importer/core/detector';
@@ -42,6 +45,7 @@ import { PlaywrightRuntimeValidator } from '../src/game-importer/runtime/playwri
 import {
   renderFailureSummary,
   renderSuccessSummary,
+  resolveValidateRealUrl,
 } from '../src/game-importer/runtime/validate-real-summary';
 
 function step(label: string): void {
@@ -49,14 +53,41 @@ function step(label: string): void {
   console.log(`[validate:real] ${label}`);
 }
 
+/** Read one line from the terminal (interactive URL input). */
+function promptLine(question: string): Promise<string> {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer);
+    });
+  });
+}
+
 async function main(): Promise<void> {
-  const sourceUrl = (process.env.REAL_TEST_SOURCE_URL ?? '').trim();
+  let sourceUrl =
+    resolveValidateRealUrl(process.argv, process.env) ?? '';
+  if (!sourceUrl) {
+    if (!process.stdin.isTTY) {
+      // eslint-disable-next-line no-console
+      console.log(
+        '[validate:real] skipped: no game URL given. ' +
+          'Pass it as an argument (`npm run validate:real -- <url>`), ' +
+          'set REAL_TEST_SOURCE_URL, or run in an interactive terminal.',
+      );
+      process.exitCode = 2;
+      return;
+    }
+    sourceUrl = (
+      await promptLine('[validate:real] Enter the game URL: ')
+    ).trim();
+  }
   if (!sourceUrl) {
     // eslint-disable-next-line no-console
-    console.log(
-      '[validate:real] skipped: REAL_TEST_SOURCE_URL is not configured. ' +
-        'Set it to an explicitly authorized game URL to run real validation.',
-    );
+    console.log('[validate:real] skipped: no game URL given.');
     process.exitCode = 2;
     return;
   }

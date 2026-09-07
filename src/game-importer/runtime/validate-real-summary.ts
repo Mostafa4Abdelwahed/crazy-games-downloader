@@ -6,6 +6,22 @@
  * / runtime result) — never hardcoded.
  */
 
+/**
+ * Resolve the game URL for `validate:real` from an explicit CLI argument
+ * first (`npm run validate:real -- <url>`), then the `REAL_TEST_SOURCE_URL`
+ * env var (CI/back-compat). Returns null when neither is provided, in
+ * which case the caller prompts interactively.
+ */
+export function resolveValidateRealUrl(
+  argv: string[],
+  env: Record<string, string | undefined>,
+): string | null {
+  const fromArg = (argv[2] ?? '').trim();
+  if (fromArg) return fromArg;
+  const fromEnv = (env['REAL_TEST_SOURCE_URL'] ?? '').trim();
+  return fromEnv || null;
+}
+
 /** Human-readable byte size, e.g. `92.2 MB`. */
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return 'unknown size';
