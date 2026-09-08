@@ -49,21 +49,50 @@ export class ImportQueueService {
     return this.driver;
   }
 
+  /** FIFO backlog for the in-process memory driver. */
+  private readonly backlog: string[] = [];
+  private draining = false;
+
   async enqueue(jobId: string): Promise<void> {
     if (this.driver === 'bullmq' && this.bullmqQueue) {
       await this.bullmqQueue.add('import', { jobId });
       return;
     }
-    // memory driver: process async in background tick
+    // memory driver: append to the FIFO and drain one job at a time so
+    // queued imports run strictly serially (first in, first out).
+    this.backlog.push(jobId);
+    this.pump();
+  }
+
+  /**
+   * Run the FIFO backlog in order, awaiting each processor call before
+   * starting the next. A single drain loop guards against overlapping runs,
+   * so downloads never happen concurrently in the in-process driver.
+   */
+  private pump() {
+    if (this.draining || !this.processor) return;
     const proc = this.processor;
-    if (!proc) {
-      this.logger.warn(`No processor registered; job ${jobId} stays queued`);
-      return;
-    }
-    setImmediate(() => {
-      proc(jobId).catch((err) =>
-        this.logger.error(`Memory queue job ${jobId} failed: ${err?.message}`),
-      );
+    this.draining = true;
+    setImmediate(async () => {
+      try {
+        while (this.backlog.length > 0) {
+          const jobId = this.backlog.shift() as string;
+          try {
+            await proc(jobId);
+          } catch (err) {
+            this.logger.error(
+              `Memory queue job ${jobId} failed: ${(err as Error)?.message}`,
+            );
+          }
+        }
+      } finally {
+        this.draining = false;
+      }
     });
+  }
+
+  /** Test/diagnostic hook: number of still-queued (not yet started) jobs. */
+  pendingCount(): number {
+    return this.backlog.length;
   }
 }
