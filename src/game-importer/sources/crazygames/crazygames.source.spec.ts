@@ -252,3 +252,137 @@ describe('CrazyGamesSourceAdapter resolve', () => {
     }
   });
 });
+
+describe('CrazyGamesSourceAdapter listGames', () => {
+  const LISTING_MAP: Record<string, FakeEntry> = {
+    'https://www.crazygames.com/c/action': {
+      body: read('listing-page.html'),
+    },
+  };
+
+  it('discovers canonical game links from a listing page', async () => {
+    const { adapter, downloader, restore } = buildAdapter(LISTING_MAP);
+    try {
+      const { games } = await adapter.listGames(
+        'https://www.crazygames.com/c/action',
+        {},
+      );
+      expect(games).toHaveLength(4);
+      expect(games[0]).toEqual({
+        url: 'https://www.crazygames.com/game/space-adventure',
+        title: 'Space Adventure',
+        thumbnail: 'https://images.crazygames.com/space-adventure/thumb.png',
+      });
+      expect(games[2]).toEqual({
+        url: 'https://www.crazygames.com/game/neo-console',
+        title: 'Neo Console',
+        thumbnail: 'https://www.crazygames.com/assets/neo-console/thumb.jpg',
+      });
+      expect(downloader.calls).toEqual(['https://www.crazygames.com/c/action']);
+    } finally {
+      restore();
+    }
+  });
+
+  it('explains an empty listing instead of returning a cryptic empty array', async () => {
+    const { adapter, restore } = buildAdapter({
+      'https://www.crazygames.com/c/none': {
+        body: Buffer.from(
+          '<html><head><title>Games We Like</title></head>' +
+            '<body><a href="/about">About</a></body></html>',
+        ),
+      },
+    });
+    try {
+      const res = await adapter.listGames(
+        'https://www.crazygames.com/c/none',
+        {},
+      );
+      expect(res.games).toEqual([]);
+      expect(res.note).toContain('Games We Like');
+      expect(res.note).toContain('none pointed at /game/{slug}');
+    } finally {
+      restore();
+    }
+  });
+
+  it('reads the full grid from __NEXT_DATA__ when anchors only mention a few', async () => {
+    const nextData =
+      '<script id="__NEXT_DATA__" type="application/json">' +
+      JSON.stringify({
+        props: {
+          pageProps: {
+            games: {
+              pagination: { page: 1, size: 60 },
+              total: 717,
+              items: [
+                {
+                  name: 'War the Knights',
+                  slug: 'war-the-knights',
+                  cover: 'wc_16x9/c/x-cover',
+                },
+                { name: 'Run 3', slug: 'run-3' },
+              ],
+            },
+          },
+        },
+      }) +
+      '</script>';
+    const { adapter, restore } = buildAdapter({
+      'https://www.crazygames.com/c/action': {
+        body: Buffer.from(
+          '<html><head><title>Action Games</title></head>' +
+            '<body>' +
+            nextData +
+            '<a href="/game/war-the-knights"><span>War the Knights</span></a></body></html>',
+        ),
+      },
+    });
+    try {
+      const res = await adapter.listGames(
+        'https://www.crazygames.com/c/action',
+        {},
+      );
+      expect(res.games).toHaveLength(2);
+      expect(res.games[0]).toEqual({
+        url: 'https://www.crazygames.com/game/war-the-knights',
+        title: 'War the Knights',
+        thumbnail:
+          'https://images.crazygames.com/wc_16x9/c/x-cover?format=auto&quality=100&metadata=none&width=480&height=270',
+      });
+      expect(res.games[1]).toEqual({
+        url: 'https://www.crazygames.com/game/run-3',
+        title: 'Run 3',
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it('rejects a listing URL that is not allowlisted before fetching', async () => {
+    const { adapter, downloader, restore } = buildAdapter(LISTING_MAP, '');
+    try {
+      await expect(
+        adapter.listGames('https://www.crazygames.com/c/action', {}),
+      ).rejects.toBeInstanceOf(SourceNotAllowedError);
+      expect(downloader.calls).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  it('refuses an access-restricted listing instead of bypassing', async () => {
+    const { adapter, restore } = buildAdapter({
+      'https://www.crazygames.com/c/action': {
+        body: Buffer.from('<html><body>Just a moment...</body></html>'),
+      },
+    });
+    try {
+      await expect(
+        adapter.listGames('https://www.crazygames.com/c/action', {}),
+      ).rejects.toThrow(/restricted access/i);
+    } finally {
+      restore();
+    }
+  });
+});

@@ -3,6 +3,8 @@ import {
   CrazyGamesDeliveryConfig,
   CrazyGamesFrameAssets,
   CrazyGamesFrameDiscovery,
+  CrazyGamesGameLink,
+  CrazyGamesListingDiagnostics,
   CrazyGamesPageMeta,
 } from './crazygames.types';
 
@@ -27,6 +29,45 @@ const NON_GAME_IFRAME_HOSTS = [
 export function isCrazyGamesHost(hostname: string): boolean {
   const host = hostname.trim().toLowerCase();
   return host === CRAZYGAMES_ROOT || host.endsWith(`.${CRAZYGAMES_ROOT}`);
+}
+
+/**
+ * Find every object in the `__NEXT_DATA__` tree shaped like a paginated
+ * game list (`{ items: GameItem[], pagination: {...} }`). Matched lists
+ * are not descended into; the deepest page-state bags win.
+ */
+function collectGamesLists(
+  node: unknown,
+  out: Array<Array<Record<string, unknown>>>,
+): void {
+  if (Array.isArray(node)) {
+    for (const child of node) collectGamesLists(child, out);
+    return;
+  }
+  if (!node || typeof node !== 'object') return;
+  const obj = node as Record<string, unknown>;
+  if (Array.isArray(obj.items) && obj.items.length > 0 && obj.pagination) {
+    out.push(obj.items as Array<Record<string, unknown>>);
+    return;
+  }
+  for (const value of Object.values(obj)) collectGamesLists(value, out);
+}
+
+/** Collapse whitespace (including newlines) to single spaces and trim. */
+function cleanText(s: string): string {
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+/** Minimal HTML entity decoding for link text/titles. */
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&#0*39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#x27;/gi, "'");
 }
 
 /**
@@ -129,6 +170,89 @@ export class CrazyGamesParser {
   }
 
   /**
+   * Discover game links from a listing page (category/tag/home). Anchors
+   * pointing at `/game/{slug}` are canonicalized and de-duplicated; the
+   * title comes from the link's image alt or text, the thumbnail from the
+   * link's first image. Sorted by page order, capped at `max`.
+   */
+  extractGameLinks(
+    html: string,
+    baseUrl: string,
+    max = 50,
+  ): CrazyGamesGameLink[] {
+    const cap = Math.max(1, Math.min(max, 200));
+    const out: CrazyGamesGameLink[] = [];
+    const seen = new Set<string>();
+    const anchorRe =
+      /<a\b[^>]*?\bhref\s*=\s*["']([^"']{1,2000})["'][^>]*>([\s\S]*?)<\/a\s*>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = anchorRe.exec(html.slice(0, 3_000_000))) !== null) {
+      if (out.length >= cap) break;
+      const url = this.toGamePageUrl(m[1], baseUrl);
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      const inner = m[2] ?? '';
+      const slug = this.slugFromGameUrl(url);
+      const title = this.gameLinkTitle(inner, slug);
+      const thumbnail = this.gameLinkThumbnail(inner, baseUrl);
+      out.push({
+        url,
+        title,
+        ...(thumbnail ? { thumbnail } : {}),
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Extract the full game grid from the page's `__NEXT_DATA__` app state
+   * (`props.pageProps.games.items` and equivalent shapes). Next.js only
+   * server-renders a handful of anchors while the whole paginated listing
+   * (e.g. 60 games) lives in this JSON — so anchors alone undercount real
+   * pages. Returns the largest matching list; `[]` when the shape differs,
+   * the caller then falls back to anchor extraction.
+   */
+  extractNextDataGames(html: string, max = 200): CrazyGamesGameLink[] {
+    const cap = Math.max(1, Math.min(max, 200));
+    const blob = this.nextDataBlob(html);
+    if (!blob) return [];
+    let root: unknown;
+    try {
+      root = JSON.parse(blob);
+    } catch {
+      return [];
+    }
+    const lists: Array<Array<Record<string, unknown>>> = [];
+    collectGamesLists(root, lists);
+    if (lists.length === 0) return [];
+    lists.sort((a, b) => b.length - a.length);
+    const out: CrazyGamesGameLink[] = [];
+    const seen = new Set<string>();
+    for (const item of lists[0]) {
+      if (out.length >= cap) break;
+      const slug = item.slug;
+      const name = item.name;
+      if (typeof slug !== 'string' || !slug) continue;
+      if (typeof name !== 'string' || !name.trim()) continue;
+      const url = this.toGamePageUrl(
+        `/game/${slug}`,
+        'https://www.crazygames.com/',
+      );
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      const title = name.trim().slice(0, 120);
+      if (!title) continue;
+      const cover = item.cover;
+      const thumbnail =
+        typeof cover === 'string' && cover.length > 0 && cover.length < 300
+          ? `https://images.crazygames.com/${cover}?format=auto&quality=100&metadata=none&width=480&height=270`
+          : undefined;
+      out.push({ url, title, ...(thumbnail ? { thumbnail } : {}) });
+    }
+    return out;
+  }
+
+  /**
    * Extract explicit portal delivery configuration (M3.1): the game
    * document URL(s), loader bundle URL, and Unity build asset URLs as
    * named by the page's own public delivery schema. Structured
@@ -225,6 +349,94 @@ export class CrazyGamesParser {
     let m: RegExpExecArray | null;
     while ((m = re.exec(html.slice(0, 1_000_000))) !== null) out.push(m[1]);
     return out;
+  }
+
+  /**
+   * Canonicalize an anchor href into a CrazyGames game page URL, or null.
+   * Accepts `/game/{slug}` (and `/{locale}/game/{slug}`) links on the
+   * platform, always http(s), with query + fragment stripped so the same
+   * game maps to one canonical URL.
+   */
+  private toGamePageUrl(ref: string, baseUrl: string): string | null {
+    const trimmed = ref.trim();
+    if (
+      !trimmed ||
+      /^(javascript|mailto|tel|data|blob|about):/i.test(trimmed)
+    ) {
+      return null;
+    }
+    let abs: URL;
+    try {
+      abs = new URL(trimmed, baseUrl);
+    } catch {
+      return null;
+    }
+    if (!['http:', 'https:'].includes(abs.protocol)) return null;
+    if (!isCrazyGamesHost(abs.hostname)) return null;
+    const segs = abs.pathname.split('/').filter(Boolean);
+    let slug: string | null = null;
+    if (segs.length >= 2 && segs[0].toLowerCase() === 'game') {
+      slug = segs.slice(1).join('/');
+    } else if (segs.length >= 3 && segs[1].toLowerCase() === 'game') {
+      slug = segs.slice(2).join('/');
+    }
+    if (!slug || slug.length > 512) return null;
+    if (slug.split('/').some((s) => s === '.' || s === '..')) return null;
+    const canonical = new URL(`https://${abs.host.toLowerCase()}`);
+    canonical.pathname = `/game/${slug}`;
+    return canonical.toString();
+  }
+
+  /**
+   * Explain why a page did or didn't yield game links, so the console can
+   * show an actionable message instead of a blind "no games found".
+   */
+  diagnoseListing(html: string, baseUrl: string): CrazyGamesListingDiagnostics {
+    const slice = html.slice(0, 3_000_000);
+    const anchorRe = /<a\b[^>]*?\bhref\s*=\s*["']([^"']{1,2000})["'][^>]*>/gi;
+    let totalAnchors = 0;
+    let gameAnchors = 0;
+    let m: RegExpExecArray | null;
+    while ((m = anchorRe.exec(slice)) !== null) {
+      totalAnchors += 1;
+      if (this.toGamePageUrl(m[1], baseUrl)) gameAnchors += 1;
+    }
+    const titleMatch = html.match(/<title[^>]*>([^<]{1,300})<\/title\s*>/i);
+    return {
+      ...(titleMatch?.[1]?.trim() ? { pageTitle: titleMatch[1].trim() } : {}),
+      totalAnchors,
+      gameAnchors,
+      hasNextData: this.nextDataBlob(html) !== null,
+      accessRestricted: this.detectAccessRestriction(html),
+    };
+  }
+
+  private slugFromGameUrl(url: string): string {
+    try {
+      const segs = new URL(url).pathname.split('/').filter(Boolean);
+      return segs.length >= 2 ? segs.slice(1).join('-') : url;
+    } catch {
+      return url;
+    }
+  }
+
+  private gameLinkTitle(innerHtml: string, fallback: string): string {
+    const alt = innerHtml.match(
+      /<img\b[^>]*?\balt\s*=\s*["']([^"']{1,500})["']/i,
+    )?.[1];
+    const text = cleanText(decodeEntities(innerHtml.replace(/<[^>]+>/g, ' ')));
+    const title = text || (alt && alt.trim()) || fallback.replace(/-+/g, ' ');
+    return title.trim().slice(0, 120);
+  }
+
+  private gameLinkThumbnail(
+    innerHtml: string,
+    baseUrl: string,
+  ): string | undefined {
+    const src = innerHtml.match(
+      /<img\b[^>]*?\bsrc\s*=\s*["']([^"']{1,2000})["']/i,
+    )?.[1];
+    return src ? (this.toAbsoluteHttp(src, baseUrl) ?? undefined) : undefined;
   }
 
   private toAbsoluteHttp(ref: string, baseUrl: string): string | null {

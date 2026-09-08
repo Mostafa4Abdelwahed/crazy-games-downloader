@@ -2,13 +2,16 @@ import { Injectable } from '@nestjs/common';
 import { SecureDownloader } from '../../core/downloader';
 import { AuthorizedSourcePolicy } from '../authorized-source-policy';
 import {
+  DiscoveredGame,
   GameSourceAdapter,
+  ListedGamesResult,
   ResolvedGameSource,
   SourceAccessRestrictedError,
   SourceContext,
   SourceRedirectedError,
 } from '../source.interface';
 import { CrazyGamesParser, isCrazyGamesHost } from './crazygames.parser';
+import { CrazyGamesGameLink } from './crazygames.types';
 import { UnityBuildRoleUrls } from '../source.interface';
 
 const ADAPTER_NAME = 'crazygames';
@@ -46,6 +49,91 @@ export class CrazyGamesSourceAdapter implements GameSourceAdapter {
       return false;
     }
     return isCrazyGamesHost(host);
+  }
+
+  /**
+   * Discover game links from a listing page (category/tag/home/…). Same
+   * authorization + SSRF + access-restriction guards as `resolve()`; returns
+   * canonical `/game/{slug}` URLs ready for a batch import.
+   */
+  async listGames(
+    url: string,
+    context: SourceContext = {},
+  ): Promise<ListedGamesResult> {
+    const canonical = this.parser.normalizeUrl(url);
+
+    // 1. SourcePolicy BEFORE any network I/O.
+    this.authorized.assertAuthorized(canonical);
+
+    const timeoutMs = context.timeoutMs ?? 30_000;
+
+    // 2. Fetch the public listing page (SSRF + redirect-safe downloader).
+    const page = await this.downloader.fetchBuffer(canonical, {
+      timeoutMs,
+      ...(typeof context.maxBytes === 'number'
+        ? { maxBytes: context.maxBytes }
+        : {}),
+    });
+
+    // 3. Revalidate: final URL must still be authorized AND on-platform.
+    this.authorized.assertAuthorized(page.finalUrl);
+    if (!this.canHandle(page.finalUrl)) {
+      throw new SourceRedirectedError(
+        'Source redirected off the CrazyGames platform; refusing to follow.',
+      );
+    }
+
+    const html = page.body.toString('utf8').slice(0, 3_000_000);
+    if (this.parser.detectAccessRestriction(html)) {
+      throw new SourceAccessRestrictedError(
+        'Source page indicates restricted access; will not attempt to bypass it.',
+      );
+    }
+
+    // The real grid lives in the Next.js app state; anchors are only a
+    // fallback (and an undercount on real pages). Merge, dedupe, cap.
+    const MAX_GAMES = 200;
+    const anchorLinks = this.parser.extractGameLinks(
+      html,
+      page.finalUrl,
+      MAX_GAMES,
+    );
+    const stateLinks = this.parser.extractNextDataGames(html, MAX_GAMES);
+    const links: CrazyGamesGameLink[] = [];
+    const seen = new Set<string>();
+    for (const link of [...stateLinks, ...anchorLinks]) {
+      if (!link.url || seen.has(link.url)) continue;
+      seen.add(link.url);
+      links.push(link);
+      if (links.length >= MAX_GAMES) break;
+    }
+
+    const games: DiscoveredGame[] = links.map((link) => ({
+      url: link.url,
+      title: link.title,
+      ...(link.thumbnail ? { thumbnail: link.thumbnail } : {}),
+    }));
+    if (games.length > 0) return { games };
+
+    // No links: explain exactly what the served page contained so the
+    // console can surface an actionable message.
+    const diag = this.parser.diagnoseListing(html, page.finalUrl);
+    const tag = diag.pageTitle
+      ? `Page "${diag.pageTitle}" served ${diag.totalAnchors} link(s)`
+      : `Page served ${diag.totalAnchors} link(s)`;
+    let note: string;
+    if (diag.accessRestricted) {
+      note = 'Page signals restricted access (challenge/captcha).';
+    } else if (diag.gameAnchors === 0 && diag.totalAnchors > 0) {
+      note = `${tag}, but none pointed at /game/{slug} pages.`;
+    } else if (diag.totalAnchors === 0 && diag.hasNextData) {
+      note = `${tag} and no static <a> anchors — the game grid appears to be client-side JS rendered.`;
+    } else if (diag.totalAnchors === 0) {
+      note = `${tag} and no <a> anchors at all; the page may be a consent/blocking page.`;
+    } else {
+      note = `${tag}, all non-game.`;
+    }
+    return { games: [], note };
   }
 
   async resolve(

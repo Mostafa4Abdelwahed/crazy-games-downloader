@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   PrimaryColumn,
   UpdateDateColumn,
 } from 'typeorm';
@@ -14,6 +15,15 @@ export class ImportJobEntity {
 
   @Column('text')
   sourceUrl!: string;
+
+  /**
+   * Normalized URL key used to deduplicate submissions: re-pressing the
+   * same game reuses an in-flight job or starts an update (new run) after
+   * a terminal one, instead of creating duplicate rows.
+   */
+  @Index()
+  @Column('text', { default: '' })
+  sourceKey!: string;
 
   @Column('text', { default: 'queued' })
   status!: ImportState;

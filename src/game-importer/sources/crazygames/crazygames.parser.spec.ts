@@ -132,3 +132,152 @@ describe('CrazyGamesParser page parsing', () => {
     }
   });
 });
+
+describe('CrazyGamesParser game link extraction', () => {
+  const parser = new CrazyGamesParser();
+  const LISTING_BASE = 'https://www.crazygames.com/c/action';
+
+  it('extracts canonical /game/{slug} links with title + thumbnail in page order', () => {
+    const links = parser.extractGameLinks(
+      read('listing-page.html'),
+      LISTING_BASE,
+    );
+    expect(links).toEqual([
+      {
+        url: 'https://www.crazygames.com/game/space-adventure',
+        title: 'Space Adventure',
+        thumbnail: 'https://images.crazygames.com/space-adventure/thumb.png',
+      },
+      {
+        url: 'https://www.crazygames.com/game/drive-quest---car-game',
+        title: 'Drive Quest',
+        thumbnail: 'https://images.crazygames.com/drive-quest/thumb.png',
+      },
+      {
+        url: 'https://www.crazygames.com/game/neo-console',
+        title: 'Neo Console',
+        thumbnail: 'https://www.crazygames.com/assets/neo-console/thumb.jpg',
+      },
+      {
+        url: 'https://www.crazygames.com/game/crystal-caves',
+        title: 'Crystal Caves',
+      },
+    ]);
+  });
+
+  it('strips query + fragment so the same game maps to one canonical URL', () => {
+    const html =
+      '<a href="/game/foo?utm=x"><img src="/i/foo.png" alt="Foo"></a>' +
+      '<a href="/game/foo#top"><img src="/i/foo2.png" alt="Foo Again"></a>';
+    const links = parser.extractGameLinks(html, LISTING_BASE);
+    expect(links).toEqual([
+      {
+        url: 'https://www.crazygames.com/game/foo',
+        title: 'Foo',
+        thumbnail: 'https://www.crazygames.com/i/foo.png',
+      },
+    ]);
+  });
+
+  it('falls back to the slug for title when a link has no text or alt', () => {
+    const links = parser.extractGameLinks(
+      '<a href="/game/neo-console"><img src="https://images.crazygames.com/nc/thumb.jpg"></a>',
+      LISTING_BASE,
+    );
+    expect(links[0].title).toBe('neo console');
+  });
+
+  it('caps extraction at max (default 50, hard ceiling 200)', () => {
+    const html = Array.from(
+      { length: 60 },
+      (_, i) => `<a href="/game/game-${i}"><span>Game ${i}</span></a>`,
+    ).join('');
+    expect(parser.extractGameLinks(html, LISTING_BASE)).toHaveLength(50);
+    expect(parser.extractGameLinks(html, LISTING_BASE, 10)).toHaveLength(10);
+  });
+
+  it('accepts locale-prefixed /game/ links and canonicalizes them', () => {
+    const links = parser.extractGameLinks(
+      '<a href="/en/game/space-adventure"><span>Space Adventure</span></a>',
+      LISTING_BASE,
+    );
+    expect(links[0].url).toBe(
+      'https://www.crazygames.com/game/space-adventure',
+    );
+  });
+
+  it('diagnoses why a listing yielded no game links', () => {
+    const diag = parser.diagnoseListing(
+      '<html><head><title>Consent Wall</title></head>' +
+        '<body><a href="/about">About</a><a href="https://partner.example/x">X</a></body></html>',
+      LISTING_BASE,
+    );
+    expect(diag.pageTitle).toBe('Consent Wall');
+    expect(diag.totalAnchors).toBe(2);
+    expect(diag.gameAnchors).toBe(0);
+    expect(diag.hasNextData).toBe(false);
+    expect(diag.accessRestricted).toBe(false);
+  });
+});
+
+describe('CrazyGamesParser extractNextDataGames', () => {
+  const parser = new CrazyGamesParser();
+  const nextScript = (
+    items: Array<{ name: string; slug: string; cover?: string }>,
+  ) =>
+    '<script id="__NEXT_DATA__" type="application/json">' +
+    JSON.stringify({
+      props: {
+        pageProps: {
+          categoryState: {
+            games: { pagination: { page: 1, size: 60 }, total: 500, items },
+          },
+        },
+      },
+      buildId: 'x',
+    }) +
+    '</script>';
+
+  it('extracts the full paginated game grid from __NEXT_DATA__', () => {
+    const links = parser.extractNextDataGames(
+      nextScript([
+        {
+          name: 'War the Knights',
+          slug: 'war-the-knights',
+          cover: 'war-the-knights_16x9/c/wc-cover',
+        },
+        { name: 'Run 3', slug: 'run-3' },
+      ]),
+    );
+    expect(links).toHaveLength(2);
+    expect(links[0]).toEqual({
+      url: 'https://www.crazygames.com/game/war-the-knights',
+      title: 'War the Knights',
+      thumbnail:
+        'https://images.crazygames.com/war-the-knights_16x9/c/wc-cover?format=auto&quality=100&metadata=none&width=480&height=270',
+    });
+    expect(links[1]).toEqual({
+      url: 'https://www.crazygames.com/game/run-3',
+      title: 'Run 3',
+    });
+  });
+
+  it('honors the max cap', () => {
+    const items = Array.from({ length: 10 }, (_, i) => ({
+      name: `Game ${i}`,
+      slug: `game-${i}`,
+    }));
+    expect(parser.extractNextDataGames(nextScript(items), 3)).toHaveLength(3);
+  });
+
+  it('returns [] for pages without a __NEXT_DATA__ blob or games list', () => {
+    expect(parser.extractNextDataGames('<html><body>hi</body></html>')).toEqual(
+      [],
+    );
+    expect(
+      parser.extractNextDataGames(
+        '<script id="__NEXT_DATA__">{"props":{"pageProps":{"nope":1}}}</script>',
+      ),
+    ).toEqual([]);
+  });
+});

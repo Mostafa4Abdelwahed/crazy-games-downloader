@@ -8,6 +8,8 @@ import {
   Query,
 } from '@nestjs/common';
 import { CreateImportDto } from './dto/create-import.dto';
+import { BatchImportDto } from './dto/batch-import.dto';
+import { DiscoverImportDto } from './dto/discover-import.dto';
 import { GameImportsService } from './game-imports.service';
 
 /**
@@ -24,10 +26,25 @@ export class GameImportsController {
     return this.service.create(dto.sourceUrl);
   }
 
+  @Post('batch')
+  createBatch(@Body() dto: BatchImportDto) {
+    return this.service.createBatch(dto.sourceUrls);
+  }
+
+  @Post('discover')
+  @HttpCode(200)
+  discover(@Body() dto: DiscoverImportDto) {
+    return this.service.discoverGames(dto.pageUrl);
+  }
+
   @Get()
-  list(@Query('limit') limit?: string) {
+  list(@Query('page') page?: string, @Query('limit') limit?: string) {
+    const p = page === undefined ? 1 : Number(page);
     const n = limit === undefined ? 50 : Number(limit);
-    return this.service.list(Number.isFinite(n) ? n : 50);
+    return this.service.list(
+      Number.isFinite(p) ? p : 1,
+      Number.isFinite(n) ? n : 50,
+    );
   }
 
   @Get(':id')

@@ -50,10 +50,40 @@ export interface ResolvedGameSource {
   };
 }
 
+/**
+ * Platform-agnostic game discovered on a listing page (category/tag/home).
+ * URLs are canonical source pages; no platform-specific structure leaks.
+ */
+export interface DiscoveredGame {
+  /** Canonical source game page URL. */
+  url: string;
+  /** Human-readable game title. */
+  title: string;
+  /** Absolute http(s) thumbnail URL, when the listing exposes one. */
+  thumbnail?: string;
+}
+
+/**
+ * Result of a listing discovery. `note` explains a partial/empty result
+ * (e.g. "page returned 0 anchors; grid is client-side rendered") so the
+ * console can show an actionable message instead of a blind "no games".
+ */
+export interface ListedGamesResult {
+  games: DiscoveredGame[];
+  note?: string;
+}
+
 export interface GameSourceAdapter {
   readonly name: string;
   /** Pure, synchronous URL check. Must NOT perform network I/O. */
   canHandle(url: string): boolean;
+  /**
+   * Optional: enumerate games found on a listing page (category/tag/home).
+   * Implemented only by sources that publish browsable listings. Uses the
+   * same SourcePolicy + SSRF guards as {@link resolve}; the returned URLs
+   * are feedable straight into a batch import.
+   */
+  listGames?(url: string, context: SourceContext): Promise<ListedGamesResult>;
   /**
    * Resolve an authorized source URL into a {@link ResolvedGameSource}.
    * Must validate SourcePolicy BEFORE fetching, preserve all SSRF
