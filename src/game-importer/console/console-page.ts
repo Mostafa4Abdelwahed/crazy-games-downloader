@@ -119,7 +119,7 @@ export function renderConsolePage(): string {
     '.btn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}\n' +
     '.appbar h1{margin:0;font-size:1.2rem;font-weight:800}\n' +
     '.appbar p{margin:0;font-size:.85rem;color:var(--text-2);opacity:.85}\n' +
-    'main{max-width:1040px;margin:0 auto;padding:22px 18px 56px}\n' +
+    'main{padding:22px 22px 56px}\n' +
     '.card{background:var(--surface);border:1px solid var(--divider);border-radius:var(--radius-card);box-shadow:var(--shadow-1);padding:20px;margin:16px 0}\n' +
     '.section-title{margin:0 0 14px;font-size:.75rem;font-weight:800;color:var(--brand-soft);text-transform:uppercase;letter-spacing:.12em}\n' +
     '.field{width:100%;border:1px solid var(--divider);border-radius:var(--radius-med);padding:12px 14px;font:inherit;background:var(--surface-raised);color:var(--text);resize:vertical}\n' +
@@ -197,6 +197,12 @@ export function renderConsolePage(): string {
     '.pager #jobsPageInfo{margin-right:auto}\n' +
     '.pager-size{display:inline-flex;align-items:center;font-size:.82rem;white-space:nowrap}\n' +
     '.pager .btn:disabled{cursor:not-allowed}\n' +
+    '.workbench{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(320px,1fr);gap:16px;align-items:start;margin:16px 0}\n' +
+    '.workbench .card{margin:0}\n' +
+    '.workbench-right{position:sticky;top:86px;max-height:calc(100vh - 106px);display:flex;flex-direction:column;overflow:hidden}\n' +
+    '.workbench-right #detail{overflow-y:auto;min-height:200px}\n' +
+    '.workbench-right #detail.muted{padding:12px 4px}\n' +
+    '@media (max-width:980px){.workbench{grid-template-columns:1fr}.workbench-right{position:static;max-height:none}}\n' +
     '</style>\n' +
     '</head>\n' +
     '<body>\n' +
@@ -235,7 +241,8 @@ export function renderConsolePage(): string {
     '<div id="discoverStatus" class="muted"></div>\n' +
     '<div id="discoverError" class="err"></div>\n' +
     '</section>\n' +
-    '<section class="card">\n' +
+    '<div class="workbench">\n' +
+    '<section class="card workbench-left">\n' +
     '<h2 class="section-title">Jobs</h2>\n' +
     '<div class="table-wrap">\n' +
     '<table><thead><tr><th>ID</th><th>Source</th><th>Status</th><th>Progress</th><th>Updated</th></tr></thead>\n' +
@@ -254,10 +261,11 @@ export function renderConsolePage(): string {
     '</label>\n' +
     '</div>\n' +
     '</section>\n' +
-    '<section class="card">\n' +
+    '<section class="card workbench-right">\n' +
     '<h2 class="section-title">Details</h2>\n' +
     '<div id="detail" class="muted">Select a job to inspect it.</div>\n' +
     '</section>\n' +
+    '</div>\n' +
     '</main>\n' +
     '<div id="discoverModal" class="modal" hidden>\n' +
     '<div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="discoverModalTitle">\n' +

@@ -126,6 +126,22 @@ describe('management console page', () => {
     );
   });
 
+  it('uses a two-column workbench: scrollable jobs left, sticky details right', () => {
+    const html = renderConsolePage();
+    // Jobs + Details live side by side; Details sticks while jobs scroll.
+    expect(html).toContain('class="workbench"');
+    expect(html).toContain('workbench-left');
+    expect(html).toContain('workbench-right');
+    expect(html).toContain('.workbench-right{position:sticky');
+    expect(html).toContain(
+      'grid-template-columns:minmax(0,1.7fr) minmax(320px,1fr)',
+    );
+    // The sticky panel scrolls its own content instead of the page.
+    expect(html).toContain('.workbench-right #detail{overflow-y:auto');
+    // Narrow viewports fall back to a single stacked column.
+    expect(html).toContain('@media (max-width:980px)');
+  });
+
   it('polls the job list only while jobs are in flight, never when idle', () => {
     const html = renderConsolePage();
     // The only loadJobs interval anywhere is the one inside startPoll(),
