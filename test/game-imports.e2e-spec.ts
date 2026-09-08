@@ -6,10 +6,15 @@ import request from 'supertest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { GameImporterModule } from '../src/game-importer/game-importer.module';
 import { ImportJobEntity } from '../src/game-importer/entities/import-job.entity';
 import { SecureDownloader } from '../src/game-importer/core/downloader';
 import { ImportWorker } from '../src/game-importer/queue/import.worker';
+import {
+  GAME_BROWSER_OPENER,
+  GAME_LOCAL_SERVER,
+} from '../src/game-importer/game-imports.service';
 
 const ENTRY_HTML = `<!doctype html><html><head><title>T</title></head><body>
 <canvas id="unity-canvas"></canvas>
@@ -85,6 +90,14 @@ describe('Game imports integration', () => {
     })
       .overrideProvider(SecureDownloader)
       .useValue(fakeDownloader(siteMap))
+      .overrideProvider(GAME_BROWSER_OPENER)
+      .useValue(() => null)
+      .overrideProvider(GAME_LOCAL_SERVER)
+      .useValue(async () => ({
+        url: 'http://localhost:7000/',
+        port: 7000,
+        child: { kill: jest.fn() },
+      }))
       .compile();
 
     app = module.createNestApplication();
@@ -166,6 +179,38 @@ describe('Game imports integration', () => {
       .expect(200);
     expect(Array.isArray(logs.body)).toBe(true);
     expect(logs.body.length).toBeGreaterThan(0);
+  });
+
+  it('serves a completed package via run and stops it', async () => {
+    const created = await request(app.getHttpServer())
+      .post('/game-imports')
+      .send({ sourceUrl: base })
+      .expect(201);
+    const done = await waitFor(created.body.id, ['completed', 'failed']);
+    expect(done.status).toBe('completed');
+
+    const run = await request(app.getHttpServer())
+      .post(`/game-imports/${created.body.id}/run`)
+      .expect(200);
+    expect(run.body.url).toMatch(/^http:\/\/localhost:\d+\/$/);
+    expect(run.body.port).toBeGreaterThan(0);
+
+    // Double-start is idempotent (same server reused).
+    const run2 = await request(app.getHttpServer())
+      .post(`/game-imports/${created.body.id}/run`)
+      .expect(200);
+    expect(run2.body.url).toBe(run.body.url);
+
+    const stop = await request(app.getHttpServer())
+      .post(`/game-imports/${created.body.id}/stop`)
+      .expect(200);
+    expect(stop.body).toEqual({ url: run.body.url, stopped: true });
+  });
+
+  it('refuses run for a job with no completed package', async () => {
+    await request(app.getHttpServer())
+      .post(`/game-imports/${randomUUID()}/run`)
+      .expect(404);
   });
 
   it('rejects non-allowlisted sources before queueing', async () => {

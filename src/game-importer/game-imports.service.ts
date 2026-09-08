@@ -4,10 +4,15 @@ import {
   BadRequestException,
   OnModuleInit,
   Logger,
+  Inject,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { randomUUID } from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { spawn } from 'node:child_process';
+import * as net from 'node:net';
 import { ImportJobEntity } from './entities/import-job.entity';
 import { SourcePolicyService } from './core/source-policy';
 import { ImportQueueService } from './queue/import.queue';
@@ -21,6 +26,9 @@ import {
 } from './sources/source.interface';
 
 const LEVELS: DiagnosticLevel[] = ['info', 'warning', 'error'];
+
+/** DI token for the function that opens a URL in the default browser. */
+export const GAME_BROWSER_OPENER = Symbol('GAME_BROWSER_OPENER');
 
 const TERMINAL_STATES = new Set<ImportState>([
   'completed',
@@ -113,6 +121,114 @@ function toDiagnostics(
   }));
 }
 
+/** A locally served package (from a "Start local server" click). */
+export interface RunningGameView {
+  url: string;
+  port: number;
+}
+
+interface RunServerEntry {
+  child: ReturnType<typeof spawn>;
+  root: string;
+  url: string;
+  port: number;
+  browser?: ReturnType<typeof spawn>;
+}
+
+/** Grab an unused loopback TCP port (best-effort; releases it immediately). */
+function findFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.unref();
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const { port } = srv.address() as net.AddressInfo;
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+/** Resolve a `python` executable from the environment, cross-platform. */
+function pythonExecutable(): string {
+  return process.platform === 'win32'
+    ? 'python'
+    : (process.env.PYTHON ?? 'python3');
+}
+
+/** A local HTTP server started for one job (the "try this game" flow). */
+export interface LaunchLocalServerResult {
+  url: string;
+  port: number;
+  child: ReturnType<typeof spawn>;
+}
+export type LocalServerLauncher = (
+  root: string,
+  port: number,
+) => Promise<LaunchLocalServerResult>;
+/** DI token for the factory that starts the local package HTTP server. */
+export const GAME_LOCAL_SERVER = Symbol('GAME_LOCAL_SERVER');
+
+/** Poll a URL until it answers, so Start opens a ready server. */
+async function waitForServer(url: string, attempts = 20): Promise<void> {
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      const res = await fetch(url, { method: 'HEAD' });
+      if (res.ok || res.status >= 400) return;
+    } catch {
+      /* not ready yet */
+    }
+    await sleep(200);
+  }
+  throw new BadRequestException(`Local server did not become ready at ${url}.`);
+}
+
+/**
+ * The faithful launcher: runs `python -m http.server` rooted at the package
+ * dir — exactly the `cd <dir>` + python flow the operator uses by hand — and
+ * opens it on loopback so the served page behaves identically to the
+ * manually-run command.
+ */
+export const launchPythonHttpServer: LocalServerLauncher = async (
+  root,
+  port,
+) => {
+  const python = pythonExecutable();
+  const child = spawn(
+    python,
+    ['-m', 'http.server', String(port), '--bind', '127.0.0.1'],
+    { cwd: root, stdio: 'ignore', windowsHide: true },
+  );
+  const url = `http://localhost:${port}/`;
+  await waitForServer(url);
+  return { url, port, child };
+};
+
+/**
+ * Open a URL in the default browser, detached from the app process so it
+ * outlives the request. Cross-platform: Windows `start`, macOS `open`,
+ * Linux `xdg-open`. Guarded — never throws; failures surface as a muted
+ * note rather than a broken import.
+ */
+export function openBrowser(url: string): ReturnType<typeof spawn> | null {
+  try {
+    const cmd =
+      process.platform === 'win32'
+        ? { file: 'cmd', args: ['/c', 'start', '', url] }
+        : process.platform === 'darwin'
+          ? { file: 'open', args: [url] }
+          : { file: 'xdg-open', args: [url] };
+    const child = spawn(cmd.file, cmd.args, {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+    return child;
+  } catch {
+    return null;
+  }
+}
+
 function toJob(e: ImportJobEntity): ImportJob {
   return {
     id: e.id,
@@ -158,7 +274,15 @@ export class GameImportsService implements OnModuleInit {
     private readonly policy: SourcePolicyService,
     private readonly queue: ImportQueueService,
     private readonly sources: SourceRegistry,
+    @Inject(GAME_BROWSER_OPENER)
+    private readonly openInBrowser: (
+      url: string,
+    ) => ReturnType<typeof spawn> | null = openBrowser,
+    @Inject(GAME_LOCAL_SERVER)
+    private readonly launchServer: LocalServerLauncher = launchPythonHttpServer,
   ) {}
+
+  private readonly running = new Map<string, RunServerEntry>();
 
   /**
    * Backfill `sourceKey` for rows created before dedup existed (their
@@ -414,5 +538,75 @@ export class GameImportsService implements OnModuleInit {
     const e = await this.jobs.findOne({ where: { id } });
     if (!e) throw new NotFoundException(`Import job not found: ${id}`);
     return (e.logs ?? []) as ImportJobLogEntry[];
+  }
+
+  /**
+   * Serve a completed game's package directory through the SAME path the
+   * operator uses manually — `python -m http.server` rooted at the package
+   * dir (`cd` + python) — and open it in the default browser. Reusing the
+   * exact manual flow guarantees the served page behaves identically to the
+   * hand-run command the user already trusts. Only runs for real completed
+   * packages; never executes imported game code server-side.
+   */
+  async run(id: string): Promise<RunningGameView> {
+    const existing = this.running.get(id);
+    if (existing) {
+      return { url: existing.url, port: existing.port };
+    }
+    const e = await this.jobs.findOne({ where: { id } });
+    if (!e) throw new NotFoundException(`Import job not found: ${id}`);
+    if (e.status !== 'completed' || !e.packageUrl) {
+      throw new BadRequestException(
+        'Only completed imports with a local package can be served.',
+      );
+    }
+    const root = path.resolve(e.packageUrl);
+    let isDir = false;
+    try {
+      isDir = (await fs.promises.stat(root)).isDirectory();
+    } catch {
+      isDir = false;
+    }
+    if (!isDir) {
+      throw new BadRequestException(
+        `Package directory not found on this host: ${root}`,
+      );
+    }
+
+    const port = await findFreePort();
+    const {
+      url,
+      port: actualPort,
+      child,
+    } = await this.launchServer(root, port);
+
+    const entry: RunServerEntry = { child, root, url, port: actualPort };
+    entry.browser = this.openInBrowser(url) ?? undefined;
+    this.running.set(id, entry);
+    return { url, port: actualPort };
+  }
+
+  /**
+   * Stop the `python -m http.server` process started by {@link run} for a
+   * job (if any). The browser tab itself is user-managed; closing a browser
+   * window is not reliable cross-platform, so this only kills the server.
+   */
+  async stop(id: string): Promise<{ url: string | null; stopped: boolean }> {
+    const entry = this.running.get(id);
+    if (!entry) return { url: null, stopped: false };
+    this.running.delete(id);
+    if (entry.browser) {
+      try {
+        entry.browser.kill();
+      } catch {
+        /* best-effort */
+      }
+    }
+    try {
+      entry.child.kill();
+    } catch {
+      /* best-effort */
+    }
+    return { url: entry.url, stopped: true };
   }
 }

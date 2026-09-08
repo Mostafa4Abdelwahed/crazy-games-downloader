@@ -1,4 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
+import { mkdtemp, rm } from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { GameImportsService, normalizeSourceKey } from './game-imports.service';
 import { SourceAccessRestrictedError } from './sources/source.interface';
 
@@ -40,13 +43,20 @@ function makeService(repoOverrides: Record<string, jest.Mock> = {}) {
   const policy = { assertAllowed: jest.fn() };
   const queue = { enqueue: jest.fn(async () => undefined) };
   const sources = { findAdapter: jest.fn() };
+  const launchServer = jest.fn(async () => ({
+    url: 'http://localhost:54321/',
+    port: 54321,
+    child: { kill: jest.fn() },
+  }));
   const service = new GameImportsService(
     repo as never,
     policy as never,
     queue as never,
     sources as never,
+    jest.fn(() => null) as never,
+    launchServer as never,
   );
-  return { service, repo, policy, queue, sources };
+  return { service, repo, policy, queue, sources, launchServer };
 }
 
 describe('GameImportsService dedup + batch', () => {
@@ -367,5 +377,84 @@ describe('GameImportsService list pagination', () => {
     expect(res.items[0]).not.toHaveProperty('diagnostics');
     expect(res.items[0]).not.toHaveProperty('packageUrl');
     expect(res.items[0]).not.toHaveProperty('error');
+  });
+});
+
+describe('GameImportsService run/stop local server', () => {
+  let tmpDir: string;
+  beforeAll(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'cg2-import-'));
+  });
+  afterAll(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('serves a completed job package via python http.server, like the manual command', async () => {
+    const { service, launchServer } = makeService({
+      findOne: jest.fn(async () =>
+        toEntity({ status: 'completed', packageUrl: tmpDir }),
+      ),
+    });
+    const res = await service.run('job-1');
+    expect(res).toEqual({ url: 'http://localhost:54321/', port: 54321 });
+    // Rooted at the package dir, exactly like `cd <dir>` + python -m http.server.
+    expect(launchServer).toHaveBeenCalledWith(
+      path.resolve(tmpDir),
+      expect.any(Number),
+    );
+  });
+
+  it('is idempotent: a second run reuses the running server', async () => {
+    const { service, launchServer } = makeService({
+      findOne: jest.fn(async () =>
+        toEntity({ status: 'completed', packageUrl: tmpDir }),
+      ),
+    });
+    await service.run('job-1');
+    await service.run('job-1');
+    expect(launchServer).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects non-completed jobs and missing package directories', async () => {
+    const { service } = makeService({
+      findOne: jest.fn(async () =>
+        toEntity({ status: 'failed', packageUrl: null }),
+      ),
+    });
+    await expect(service.run('job-1')).rejects.toThrow(
+      'Only completed imports with a local package can be served.',
+    );
+  });
+
+  it('rejects when the served package directory does not exist on this host', async () => {
+    const { service } = makeService({
+      findOne: jest.fn(async () =>
+        toEntity({ status: 'completed', packageUrl: '/no/such/dir' }),
+      ),
+    });
+    await expect(service.run('job-1')).rejects.toThrow(
+      'Package directory not found on this host',
+    );
+  });
+
+  it('stop kills the python server process and reports it stopped', async () => {
+    const { service, launchServer } = makeService({
+      findOne: jest.fn(async () =>
+        toEntity({ status: 'completed', packageUrl: tmpDir }),
+      ),
+    });
+    await service.run('job-1');
+    const launched = await launchServer.mock.results[0].value;
+    const res = await service.stop('job-1');
+    expect(res).toEqual({ url: 'http://localhost:54321/', stopped: true });
+    expect(launched.child.kill).toHaveBeenCalled();
+  });
+
+  it('stop is a no-op when no server is running for the job', async () => {
+    const { service } = makeService();
+    await expect(service.stop('missing')).resolves.toEqual({
+      url: null,
+      stopped: false,
+    });
   });
 });

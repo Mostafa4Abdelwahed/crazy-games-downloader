@@ -175,6 +175,24 @@ describe('management console page', () => {
     // Copy feedback: icon swaps to a checkmark when copied.
     expect(html).toContain('CHECK_ICON');
     expect(html).toContain('M20 6L9 17l-5-5');
+    // One-click "try this game": Start serves the local package and opens
+    // the browser; Stop tears the loopback server back down. No manual
+    // cd + python needed per game.
+    expect(html).toContain('runBtn');
+    expect(html).toContain('stopBtn');
+    expect(html).toContain('runStatus');
+    expect(html).toContain('function runGame(jobId)');
+    expect(html).toContain('function stopGame(jobId)');
+    expect(html).toContain(
+      '"/game-imports/" + encodeURIComponent(jobId) + "/run"',
+    );
+    expect(html).toContain(
+      '"/game-imports/" + encodeURIComponent(jobId) + "/stop"',
+    );
+    expect(html).toContain('runGame(selectedId)');
+    expect(html).toContain('stopGame(selectedId)');
+    expect(html).toContain('disabled');
+    expect(html).toContain('Running at ');
     // Appbar is a glass (blurred translucent) bar with a brand edge.
     expect(html).toContain('backdrop-filter:blur(14px) saturate(150%)');
     expect(html).toContain('rgba(104,66,255,.25)');

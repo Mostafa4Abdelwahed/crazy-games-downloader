@@ -62,4 +62,16 @@ export class GameImportsController {
   logs(@Param('id') id: string) {
     return this.service.logs(id);
   }
+
+  @Post(':id/run')
+  @HttpCode(200)
+  run(@Param('id') id: string) {
+    return this.service.run(id);
+  }
+
+  @Post(':id/stop')
+  @HttpCode(200)
+  stop(@Param('id') id: string) {
+    return this.service.stop(id);
+  }
 }

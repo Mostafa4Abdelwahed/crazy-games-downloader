@@ -369,7 +369,7 @@ export function renderConsolePage(): string {
     '    });\n' +
     '    return html + "</tbody></table>";\n' +
     '  }\n' +
-    '  function runHelp(pkgPath) {\n' +
+    '  function runHelp(pkgPath, jobId) {\n' +
     '    if (!pkgPath) return "";\n' +
     '    return "<h3 class=\\"section-title\\">Run locally</h3>" +\n' +
     '      "<div class=\\"runbox\\"><pre id=\\"runCmd\\">cd \\"" + pkgPath.replace(/\\"/g, "") + "\\"" +\n' +
@@ -377,7 +377,41 @@ export function renderConsolePage(): string {
     '      "<button id=\\"copyRunBtn\\" class=\\"copy-btn\\" title=\\"Copy command\\" aria-label=\\"Copy command\\">" +\n' +
     '      COPY_ICON + "</button></div>" +\n' +
     '      "<p class=\\"muted\\">Open <code>http://localhost:8080</code> — serve over HTTP, never <code>file://</code> (Unity WebGL requires HTTP). " +\n' +
-    '      "Then check DevTools Console/Network for failed game assets.</p>";\n' +
+    '      "Then check DevTools Console/Network for failed game assets.</p>" +\n' +
+    '      "<div class=\\"row\\" style=\\"margin-top:10px\\">" +\n' +
+    '      "<button id=\\"runBtn\\" class=\\"btn primary\\"><svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\" focusable=\\"false\\"><polygon points=\\"6 3 20 12 6 21 6 3\\"/></svg>Start</button>" +\n' +
+    '      "<button id=\\"stopBtn\\" class=\\"btn light\\" disabled><svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\" focusable=\\"false\\"><rect x=\\"6\\" y=\\"6\\" width=\\"12\\" height=\\"12\\" rx=\\"2\\"/></svg>Stop</button>" +\n' +
+    '      "<span id=\\"runStatus\\" class=\\"muted\\"></span></div>";\n' +
+    '  }\n' +
+    '  function runGame(jobId) {\n' +
+    '    var status = document.getElementById("runStatus");\n' +
+    '    var runBtn = document.getElementById("runBtn");\n' +
+    '    var stopBtn = document.getElementById("stopBtn");\n' +
+    '    status.textContent = "Starting…";\n' +
+    '    runBtn.disabled = true;\n' +
+    '    api("/game-imports/" + encodeURIComponent(jobId) + "/run", { method: "POST" }).then(function (r) {\n' +
+    '      status.textContent = "Running at " + r.url;\n' +
+    '      stopBtn.disabled = false;\n' +
+    '    }, function (e) {\n' +
+    '      status.textContent = "";\n' +
+    '      runBtn.disabled = false;\n' +
+    '      alert(e.message);\n' +
+    '    });\n' +
+    '  }\n' +
+    '  function stopGame(jobId) {\n' +
+    '    var status = document.getElementById("runStatus");\n' +
+    '    var runBtn = document.getElementById("runBtn");\n' +
+    '    var stopBtn = document.getElementById("stopBtn");\n' +
+    '    status.textContent = "Stopping…";\n' +
+    '    stopBtn.disabled = true;\n' +
+    '    api("/game-imports/" + encodeURIComponent(jobId) + "/stop", { method: "POST" }).then(function () {\n' +
+    '      status.textContent = "Stopped.";\n' +
+    '      runBtn.disabled = false;\n' +
+    '    }, function (e) {\n' +
+    '      status.textContent = "";\n' +
+    '      stopBtn.disabled = false;\n' +
+    '      alert(e.message);\n' +
+    '    });\n' +
     '  }\n' +
     '  function copyRun() {\n' +
     '    var pre = document.getElementById("runCmd");\n' +
@@ -426,7 +460,7 @@ export function renderConsolePage(): string {
     '      if (j.packageUrl) html += "<p><strong>Partial package:</strong> <code>" + esc(j.packageUrl) + "</code></p>";\n' +
     '    }\n' +
     '    if (j.status === "completed") {\n' +
-    '      html += "<p class=\\"ok\\"><strong>Package:</strong> <code>" + esc(j.packageUrl) + "</code></p>" + runHelp(j.packageUrl);\n' +
+    '      html += "<p class=\\"ok\\"><strong>Package:</strong> <code>" + esc(j.packageUrl) + "</code></p>" + runHelp(j.packageUrl, j.id);\n' +
     '    }\n' +
     '    if (["failed", "completed", "cancelled"].indexOf(j.status) >= 0) {\n' +
     '      html += "<p><button id=\\"reimportBtn\\" class=\\"btn ghost\\"><svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><path d=\\"M23 4v6h-6\\"/><path d=\\"M20.49 15a9 9 0 1 1-2.12-9.36L23 10\\"/></svg>Re-import</button> <span class=\\"muted\\">Runs this game again (no duplicate is kept for in-flight runs).</span></p>";\n' +
@@ -438,8 +472,12 @@ export function renderConsolePage(): string {
     '    html += "<h3 class=\\"section-title\\">Logs</h3><pre>" + esc((logs || []).map(function (l) { return l.at + " [" + l.level + "] " + l.message; }).join("\\n")) + "</pre>";\n' +
     '    el.innerHTML = html;\n' +
     '    el.classList.remove("muted");\n' +
-    '    var cp = document.getElementById("copyRunBtn");\n' +
-    '    if (cp) cp.addEventListener("click", copyRun);\n' +
+    '  var cp = document.getElementById("copyRunBtn");\n' +
+    '  if (cp) cp.addEventListener("click", copyRun);\n' +
+    '  var runBtn = document.getElementById("runBtn");\n' +
+    '  if (runBtn) runBtn.addEventListener("click", function () { runGame(selectedId); });\n' +
+    '  var stopBtn = document.getElementById("stopBtn");\n' +
+    '  if (stopBtn) stopBtn.addEventListener("click", function () { stopGame(selectedId); });\n' +
     '    var cb = document.getElementById("cancelBtn");\n' +
     '    if (cb) cb.addEventListener("click", function () {\n' +
     '      cb.disabled = true;\n' +

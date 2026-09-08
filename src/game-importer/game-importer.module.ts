@@ -31,6 +31,12 @@ import { CrazyGamesSourceAdapter } from './sources/crazygames/crazygames.source'
 import { GameSourceAdapter } from './sources/source.interface';
 import { LocalPackageServer } from './runtime/local-package-server';
 import { PlaywrightRuntimeValidator } from './runtime/playwright-runtime-validator';
+import {
+  GAME_BROWSER_OPENER,
+  GAME_LOCAL_SERVER,
+  openBrowser,
+  launchPythonHttpServer,
+} from './game-imports.service';
 
 const ENGINE_COLLECTION = 'ENGINE_COLLECTION';
 const SOURCE_ADAPTER_COLLECTION = 'SOURCE_ADAPTER_COLLECTION';
@@ -41,6 +47,14 @@ const SOURCE_ADAPTER_COLLECTION = 'SOURCE_ADAPTER_COLLECTION';
   providers: [
     GameImportsService,
     GameImporterService,
+    {
+      provide: GAME_BROWSER_OPENER,
+      useValue: openBrowser,
+    },
+    {
+      provide: GAME_LOCAL_SERVER,
+      useValue: launchPythonHttpServer,
+    },
     SourcePolicyService,
     SecureDownloader,
     SecureExtractor,
