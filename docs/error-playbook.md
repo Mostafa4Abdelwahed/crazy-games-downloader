@@ -142,6 +142,44 @@ Entry format for every record:
 - **Verify:** Free space > 1 GB before rerunning.
 - **First seen:** Sep 2026 (local environment).
 
+## UNITY-ADDR-001 — Addressables 404 (`aa/settings.json`) long after boot
+
+- **Status:** solved (mechanism merged; awaiting a reachable real catalog
+  for end-to-end confirmation — remote catalogs seen so far 404, see note)
+- **Symptoms:** Healthy boot (all build assets 200, FMOD fine), then much
+  later — typically at gameplay start — `GET …/StreamingAssets/aa/
+  settings.json → 404`, followed by `RemoteProviderException:
+  TextDataProvider: unable to load from url`, `RuntimeData is null`,
+  `Addressables - Unable to load runtime data`,
+  `InvalidKeyException: No Location found for Key=…`, and finally
+  `NullReferenceException`. Everything else in the log is benign noise
+  (ObjectMultiplex, favicon 404, AudioContext autoplay warnings, ETC2 /
+  Convex Mesh warnings, `Trying to get length of sound` chatter,
+  ByteBrew/CrazySDK init lines).
+- **Root cause:** Unity Addressables content (cars, tracks, …) is described
+  by a content catalog the game fetches lazily. Bank-style runtime
+  observation can never see these requests (they fire after user
+  interaction), and bank-name construction has no filenames to scan — the
+  catalog itself is the only discovery source.
+- **Fix:** Addressables tree phase (`engines/unity/unity.addressables.ts`
+  + `downloadAddressablesTree`): probe `<streaming-assets-base>/aa/
+  settings.json` candidates (policy-gated, bounded); download the catalog
+  plus its `m_InternalId` entries under the canonical
+  `StreamingAssets/…` layout; rewrite packaged IDs catalog-relative;
+  absolute external IDs are recorded as external references, never bundled.
+  Gated on an Addressables signal in downloaded text; a missing catalog is
+  normal and skips silently-ish (info diagnostic).
+- **Verify:** `StreamingAssets/aa/settings.json` packaged with rewritten
+  IDs; served package returns it 200; no `Addressables - Unable to load`
+  cascade in the console.
+- **First seen:** 2022.3 Unity racing build served locally (user console
+  log), Sep 2026. NOTE: the remote `aa/` tree 404s on every probed base
+  for current builds — if the content is genuinely unreachable remotely,
+  it cannot be packaged and validation correctly keeps failing; confirm
+  per game from its own source URL.
+- **Needs from operator:** the source game URL of any log showing this
+  cascade, for real end-to-end verification.
+
 ## OPEN-001 — non-Unity engines in `validate:real`
 
 - **Status:** open (limitation, not a bug)

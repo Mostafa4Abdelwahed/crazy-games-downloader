@@ -20,6 +20,12 @@ import {
   toRemoteStreamingAssetsUrl,
   toStreamingAssetsPackagePath,
 } from './unity.streaming-assets';
+import {
+  catalogPackagePath,
+  extractCatalogInternalIds,
+  addressablesPackagePath,
+  rewriteCatalogIds,
+} from './unity.addressables';
 
 export interface StreamingRuntimeObservation {
   /** Absolute http(s) URLs observed under the StreamingAssets prefix. */
@@ -385,6 +391,224 @@ export class UnityStreamingAssetsDiscovery {
       { count: found.size },
     );
     return { paths: [...found.keys()], diagnostics: collector.all() };
+  }
+
+  /**
+   * Download an Addressables content tree (generic M3.3).
+   *
+   * Probes the candidate catalog URLs in order (policy-gated, bounded);
+   * the first response that parses as an Addressables catalog wins. A
+   * missing/unparsable catalog is NORMAL for non-Addressables games and
+   * simply yields no files. Entries are downloaded through the same
+   * policy/SSRF-guarded pipeline and caps as bank dependencies; the
+   * packaged catalog is rewritten so packaged IDs resolve locally.
+   */
+  async downloadAddressablesTree(input: {
+    candidateCatalogUrls: string[];
+    writeFile: (packagePath: string, bytes: Buffer) => Promise<void> | void;
+    timeoutMs?: number;
+    maxFiles?: number;
+    maxTotalBytes?: number;
+    onEvent?: (d: ImportDiagnostic) => void;
+  }): Promise<StreamingDownloadResult> {
+    const collector = new DiagnosticCollector();
+    const emit = (d: ImportDiagnostic): void => {
+      collector.add(d.level, d.code, d.message, d.details);
+      try {
+        input.onEvent?.(d);
+      } catch {
+        /* never break downloads */
+      }
+    };
+    const opts = defaultStreamingAssetsOptions();
+    const timeoutMs = input.timeoutMs ?? opts.requestTimeoutMs;
+    const maxFiles = input.maxFiles ?? opts.maxFiles;
+    const maxTotalBytes = input.maxTotalBytes ?? opts.maxTotalBytes;
+    const empty: StreamingDownloadResult = {
+      files: [],
+      totalBytes: 0,
+      limitReached: false,
+      diagnostics: collector.all(),
+    };
+    emit({
+      level: 'info',
+      code: DiagnosticCode.UNITY_ADDRESSABLES_DISCOVERY_STARTED,
+      message: `Probing ${input.candidateCatalogUrls.length} Addressables catalog candidate(s)`,
+      details: { candidates: input.candidateCatalogUrls.length },
+    });
+
+    let catalogUrl: string | null = null;
+    let catalogText: string | null = null;
+    for (const url of input.candidateCatalogUrls) {
+      if (!/^https?:/i.test(url) || !this.policy.isAllowed(url).allowed) {
+        continue;
+      }
+      try {
+        const res = await this.downloader.fetchBuffer(url, {
+          timeoutMs: Math.min(timeoutMs, 60_000),
+          maxBytes: Math.min(5_000_000, maxTotalBytes),
+        });
+        this.policy.assertAllowed(res.finalUrl);
+        const text = res.body.toString('utf8');
+        const parsed: unknown = JSON.parse(text);
+        if (
+          !parsed ||
+          typeof parsed !== 'object' ||
+          !Array.isArray(
+            (parsed as Record<string, unknown>)['m_ResourceLocators'],
+          )
+        ) {
+          continue;
+        }
+        catalogUrl = res.finalUrl;
+        catalogText = text;
+        break;
+      } catch {
+        continue;
+      }
+    }
+    if (!catalogUrl || catalogText === null) {
+      emit({
+        level: 'info',
+        code: DiagnosticCode.UNITY_ADDRESSABLES_CATALOG_MISSING,
+        message:
+          'No Addressables catalog reachable; skipping Addressables tree (normal for non-Addressables games)',
+      });
+      return { ...empty, diagnostics: collector.all() };
+    }
+
+    const ids = extractCatalogInternalIds(JSON.parse(catalogText));
+    emit({
+      level: 'info',
+      code: DiagnosticCode.UNITY_ADDRESSABLES_CATALOG_FOUND,
+      message: `Addressables catalog found with ${ids.length} entr${ids.length === 1 ? 'y' : 'ies'}`,
+      details: {
+        url: safeUrlForLog(catalogUrl),
+        entries: ids.length,
+      },
+    });
+
+    const files: StreamingDownloadResult['files'] = [];
+    let totalBytes = 0;
+    let limitReached = false;
+    const packagedById = new Map<string, string>();
+    // Reserve one slot + catalog bytes for the rewritten catalog itself.
+    for (const id of ids) {
+      if (files.length + 1 >= maxFiles || totalBytes >= maxTotalBytes) {
+        limitReached = true;
+        break;
+      }
+      let abs: string;
+      try {
+        abs = new URL(id, catalogUrl).toString();
+      } catch {
+        continue;
+      }
+      if (!/^https?:/i.test(abs) || !this.policy.isAllowed(abs).allowed) {
+        continue;
+      }
+      const pkgPath = addressablesPackagePath(abs);
+      if (!pkgPath || packagedById.has(id)) {
+        if (!pkgPath) {
+          emit({
+            level: 'warning',
+            code: DiagnosticCode.EXTERNAL_REFERENCE,
+            message: `Skipping Addressables entry outside StreamingAssets: ${id.slice(0, 120)}`,
+          });
+        }
+        continue;
+      }
+      emit({
+        level: 'info',
+        code: DiagnosticCode.UNITY_STREAMING_ASSET_DOWNLOAD_STARTED,
+        message: `Downloading Addressables entry: ${pkgPath}`,
+        details: { url: safeUrlForLog(abs) },
+      });
+      try {
+        this.policy.assertAllowed(abs);
+        const remaining = maxTotalBytes - totalBytes;
+        const res = await this.downloader.fetchBuffer(abs, {
+          timeoutMs: Math.min(timeoutMs, 60_000),
+          maxBytes: Math.min(remaining, maxTotalBytes),
+        });
+        this.policy.assertAllowed(res.finalUrl);
+        if (totalBytes + res.body.length > maxTotalBytes) {
+          limitReached = true;
+          break;
+        }
+        await input.writeFile(pkgPath, res.body);
+        totalBytes += res.body.length;
+        files.push({
+          path: pkgPath,
+          bytes: res.body.length,
+          sourceUrl: res.finalUrl,
+        });
+        packagedById.set(id, pkgPath);
+        emit({
+          level: 'info',
+          code: DiagnosticCode.UNITY_STREAMING_ASSET_DOWNLOAD_COMPLETED,
+          message: `Downloaded Addressables entry: ${pkgPath}`,
+          details: {
+            url: safeUrlForLog(res.finalUrl),
+            bytes: res.body.length,
+          },
+        });
+      } catch (err) {
+        emit({
+          level: 'warning',
+          code: DiagnosticCode.UNITY_STREAMING_ASSET_DOWNLOAD_FAILED,
+          message: `Addressables entry download failed: ${pkgPath}`,
+          details: { reason: (err as Error).message.slice(0, 300) },
+        });
+      }
+    }
+
+    // Write the (possibly ID-rewritten) catalog itself.
+    const catalogPkgPath = catalogPackagePath(catalogUrl);
+    const rewritten =
+      rewriteCatalogIds(catalogText, catalogPkgPath, packagedById) ??
+      catalogText;
+    const catalogBytes = Buffer.from(rewritten, 'utf8');
+    if (!limitReached && totalBytes + catalogBytes.length <= maxTotalBytes) {
+      try {
+        await input.writeFile(catalogPkgPath, catalogBytes);
+        totalBytes += catalogBytes.length;
+        files.unshift({
+          path: catalogPkgPath,
+          bytes: catalogBytes.length,
+          sourceUrl: catalogUrl,
+        });
+      } catch (err) {
+        emit({
+          level: 'warning',
+          code: DiagnosticCode.UNITY_STREAMING_ASSET_DOWNLOAD_FAILED,
+          message: `Addressables catalog write failed: ${catalogPkgPath}`,
+          details: { reason: (err as Error).message.slice(0, 300) },
+        });
+      }
+    } else {
+      limitReached = true;
+    }
+    if (limitReached) {
+      emit({
+        level: 'warning',
+        code: DiagnosticCode.UNITY_STREAMING_ASSETS_DISCOVERY_LIMIT_REACHED,
+        message: 'Addressables budget reached; content tree may be incomplete',
+        details: { files: files.length, totalBytes },
+      });
+    }
+    emit({
+      level: 'info',
+      code: DiagnosticCode.UNITY_ADDRESSABLES_DISCOVERY_COMPLETED,
+      message: `Addressables discovery completed: ${files.length} file(s), ${totalBytes} bytes`,
+      details: { count: files.length, totalBytes },
+    });
+    return {
+      files,
+      totalBytes,
+      limitReached,
+      diagnostics: collector.all(),
+    };
   }
 
   /**

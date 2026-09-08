@@ -18,6 +18,7 @@ import { UnityAssetResolver } from './unity.asset-resolver';
 import { UnityConfigDiscovery } from './unity.config-discovery';
 import { UnityDecompressor } from './unity.decompressor';
 import { UnityStreamingAssetsDiscovery } from './unity.streaming-assets-discovery';
+import { catalogCandidates, mentionsAddressables } from './unity.addressables';
 import {
   STREAMING_ASSETS_SEGMENT,
   defaultStreamingAssetsOptions,
@@ -464,6 +465,30 @@ export class UnityImporter implements GameEngineImporter {
       }
     }
 
+    // 5c. Addressables content tree: games using Unity Addressables fetch
+    // a content catalog (`StreamingAssets/aa/settings.json`) and its
+    // bundles long after boot (gameplay start), so neither static scans
+    // nor boot observation can see them. The catalog is located by probe
+    // and its entries downloaded through the same guarded pipeline.
+    {
+      const already = new Set(streamingFiles.map((s) => s.path));
+      const extra = await this.discoverAddressablesTree({
+        signal: resolved.streamingAssetsUrl,
+        configBaseUrl: discovered.configBaseUrl,
+        loaderJs,
+        downloaded,
+        already,
+        pkgDir,
+        limits,
+        emit,
+      });
+      for (const f of extra) {
+        const abs = path.join(pkgDir, ...f.path.split('/'));
+        await pushFile(abs, f.path);
+        streamingFiles.push(f);
+      }
+    }
+
     // Copy original loader body into package Build/ too if raw==dest handled above.
     void resolved;
     const totalBytes = files.reduce((a, f) => a + f.bytes, 0);
@@ -874,6 +899,88 @@ export class UnityImporter implements GameEngineImporter {
     } catch {
       /* keep the original loader bytes on any rewrite failure */
     }
+  }
+
+  /**
+   * Addressables content-tree phase (generic, M3.3).
+   *
+   * Gated on an Addressables signal in already-downloaded text (loader or
+   * framework); without it, probing is skipped silently. A missing catalog
+   * is normal for non-Addressables games.
+   */
+  private async discoverAddressablesTree(args: {
+    signal?: string;
+    configBaseUrl: string;
+    loaderJs: string;
+    downloaded: { url: string; filePath: string }[];
+    already: Set<string>;
+    pkgDir: string;
+    limits: ImportLimits;
+    emit: (
+      level: DiagnosticLevel,
+      code: string,
+      message: string,
+      details?: Record<string, unknown>,
+    ) => void;
+  }): Promise<{ path: string; sourceUrl: string }[]> {
+    const {
+      signal,
+      configBaseUrl,
+      loaderJs,
+      downloaded,
+      already,
+      pkgDir,
+      limits,
+      emit,
+    } = args;
+    if (mentionsAddressables(loaderJs)) {
+      /* signal in loader — proceed below */
+    } else {
+      let found = false;
+      for (const d of downloaded) {
+        if (!/\.framework\.js$/i.test(d.filePath)) continue;
+        try {
+          const text = await fs.promises.readFile(d.filePath, 'utf8');
+          if (
+            mentionsAddressables(text.slice(0, 1_000_000)) ||
+            mentionsAddressables(d.url)
+          ) {
+            found = true;
+            break;
+          }
+        } catch {
+          /* unreadable — no signal from this file */
+        }
+      }
+      if (!found) return [];
+    }
+    const svc =
+      this.streamingAssets ??
+      new UnityStreamingAssetsDiscovery(this.downloader, this.policy);
+    const opts = defaultStreamingAssetsOptions();
+    const remainingFiles = opts.maxFiles - already.size;
+    if (remainingFiles <= 0) {
+      emit(
+        'warning',
+        DiagnosticCode.UNITY_STREAMING_ASSETS_DISCOVERY_LIMIT_REACHED,
+        'Addressables skipped: StreamingAssets file cap already reached',
+        { maxFiles: opts.maxFiles },
+      );
+      return [];
+    }
+    const result = await svc.downloadAddressablesTree({
+      candidateCatalogUrls: catalogCandidates(signal, configBaseUrl),
+      writeFile: async (packagePath, bytes) => {
+        const abs = path.join(pkgDir, ...packagePath.split('/'));
+        await fs.promises.mkdir(path.dirname(abs), { recursive: true });
+        await fs.promises.writeFile(abs, bytes);
+      },
+      timeoutMs: Math.min(opts.requestTimeoutMs, limits.timeoutMs),
+      maxFiles: remainingFiles,
+      maxTotalBytes: Math.min(opts.maxTotalBytes, limits.maxDownloadBytes),
+      onEvent: (d) => emit(d.level, d.code, d.message, d.details),
+    });
+    return result.files.filter((f) => !already.has(f.path));
   }
 
   /**
