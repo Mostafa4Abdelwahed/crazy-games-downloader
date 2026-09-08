@@ -275,4 +275,97 @@ describe('Game imports integration', () => {
     expect(after.status).toBe('cancelled');
     expect(after.packageUrl).toBeNull();
   });
+
+  describe('settings', () => {
+    it('GET /game-imports/settings returns the grouped view without secrets', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/game-imports/settings')
+        .expect(200);
+      expect(res.body.server).toBeDefined();
+      expect(res.body.database.driver).toBe('sqlite');
+      expect(res.body.queue.driver).toBe('memory');
+      expect(res.body.paths.storageRoot).toBe(path.resolve(storeDir));
+      expect(res.body.paths.workDir).toBe(path.resolve(workDir));
+      expect(res.body.security.allowedHosts).toContain('partner.example');
+      expect(typeof res.body.stats.jobs).toBe('number');
+      expect(JSON.stringify(res.body)).not.toContain('redis://');
+    });
+
+    it('rejects destructive actions without the confirmation phrase', async () => {
+      await request(app.getHttpServer())
+        .post('/game-imports/settings/reset-all')
+        .send({ confirm: 'nope' })
+        .expect(400);
+      await request(app.getHttpServer())
+        .post('/game-imports/settings/clear-jobs')
+        .send({ confirm: '' })
+        .expect(400);
+      // Wrong-phrase attempts must not delete anything.
+      expect(await jobs.count()).toBeGreaterThan(0);
+    });
+
+    it('reset-all wipes jobs, work dirs and packages after confirmation', async () => {
+      // Ensure there is at least one completed package on disk.
+      const created = await request(app.getHttpServer())
+        .post('/game-imports')
+        .send({ sourceUrl: base })
+        .expect(201);
+      await waitFor(created.body.id, ['completed', 'failed']);
+      expect(fs.readdirSync(storeDir).length).toBeGreaterThan(0);
+
+      const res = await request(app.getHttpServer())
+        .post('/game-imports/settings/reset-all')
+        .send({ confirm: 'DELETE' })
+        .expect(200);
+      expect(res.body.clearedJobs).toBeGreaterThan(0);
+      expect(res.body.clearedPackages).toBeGreaterThan(0);
+      expect(res.body.clearedWork).toBeGreaterThanOrEqual(0);
+      expect(await jobs.count()).toBe(0);
+      expect(fs.readdirSync(storeDir)).toEqual([]);
+      expect(fs.readdirSync(workDir)).toEqual([]);
+
+      const after = await request(app.getHttpServer())
+        .get('/game-imports/settings')
+        .expect(200);
+      expect(after.body.stats).toEqual({
+        jobs: 0,
+        packages: 0,
+        workDirs: 0,
+      });
+    });
+
+    it('serves the settings console page', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/console/settings')
+        .expect(200);
+      expect(res.text).toContain('<!doctype html>');
+      expect(res.text).toContain('Danger zone');
+      expect(res.text).toContain('resetAllBtn');
+    });
+
+    it('clear-work and clear-packages work individually', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/game-imports')
+        .send({ sourceUrl: base })
+        .expect(201);
+      await waitFor(created.body.id, ['completed', 'failed']);
+      fs.mkdirSync(path.join(workDir, 'leftover'), { recursive: true });
+
+      const pkg = await request(app.getHttpServer())
+        .post('/game-imports/settings/clear-packages')
+        .send({ confirm: 'delete' })
+        .expect(200);
+      expect(pkg.body.cleared).toBeGreaterThan(0);
+      expect(fs.readdirSync(storeDir)).toEqual([]);
+      // Jobs survive a packages-only clear.
+      expect(await jobs.count()).toBeGreaterThan(0);
+
+      const work = await request(app.getHttpServer())
+        .post('/game-imports/settings/clear-work')
+        .send({ confirm: 'DELETE' })
+        .expect(200);
+      expect(work.body.cleared).toBeGreaterThanOrEqual(1);
+      expect(fs.readdirSync(workDir)).toEqual([]);
+    });
+  });
 });

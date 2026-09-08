@@ -140,6 +140,12 @@ export function renderConsolePage(): string {
     '.btn.light:hover{background:#ffffff}\n' +
     '.theme-btn{margin-left:auto;display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:999px;background:var(--ghost-bg);border:1px solid var(--divider);color:var(--text-2);cursor:pointer;transition:background .15s,color .15s}\n' +
     '.theme-btn:hover{background:var(--ghost-hover);color:var(--text)}\n' +
+    '.nav-tabs{display:flex;gap:8px}\n' +
+    '.nav-tabs a{display:inline-flex;align-items:center;gap:6px;padding:8px 18px;border-radius:var(--radius-pill);background:var(--ghost-bg);color:var(--ghost-fg);font-weight:700;font-size:.85rem;text-decoration:none;transition:background .15s,color .15s}\n' +
+    '.nav-tabs a:hover{background:var(--ghost-hover)}\n' +
+    '.nav-tabs a.active{background:var(--brand);color:var(--on-brand)}\n' +
+    '.nav-tabs a svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}\n' +
+    '@media (max-width:860px){.nav-tabs a span{display:none}.nav-tabs a{padding:8px 12px}}\n' +
     '.theme-btn svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}\n' +
     '.table-wrap{overflow-x:auto;border-radius:var(--radius-med);border:1px solid var(--divider);background:var(--canvas)}\n' +
     'table{border-collapse:collapse;width:100%;font-size:.88rem}\n' +
@@ -200,6 +206,10 @@ export function renderConsolePage(): string {
     '<h1>Game Import Console</h1>\n' +
     '<p>Import authorized HTML5/Unity games, watch progress, inspect diagnostics, and get local run instructions.</p>\n' +
     '</div>\n' +
+    '<nav class="nav-tabs">\n' +
+    '<a href="/console" class="active"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg><span>Console</span></a>\n' +
+    '<a href="/console/settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span>Settings</span></a>\n' +
+    '</nav>\n' +
     '<button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle color theme" title="Toggle light/dark">\n' +
     '<svg id="themeIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>\n' +
     '</button>\n' +

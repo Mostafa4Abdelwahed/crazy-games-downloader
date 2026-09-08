@@ -1,5 +1,6 @@
 import { Controller, Get, Header, Redirect } from '@nestjs/common';
 import { renderConsolePage } from './console-page';
+import { renderSettingsPage } from '../settings/settings-page';
 
 /**
  * Management console: a dependency-free status page over the existing
@@ -21,5 +22,12 @@ export class ConsoleController {
   @Header('Cache-Control', 'no-store')
   console(): string {
     return renderConsolePage();
+  }
+
+  @Get('console/settings')
+  @Header('Content-Type', 'text/html; charset=utf-8')
+  @Header('Cache-Control', 'no-store')
+  settings(): string {
+    return renderSettingsPage();
   }
 }

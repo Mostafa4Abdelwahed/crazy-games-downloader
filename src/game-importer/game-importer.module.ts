@@ -4,6 +4,8 @@ import { ImportJobEntity } from './entities/import-job.entity';
 import { GameImportsController } from './game-imports.controller';
 import { ConsoleController } from './console/console.controller';
 import { GameImportsService } from './game-imports.service';
+import { SettingsController } from './settings/settings.controller';
+import { SettingsService } from './settings/settings.service';
 import { SourcePolicyService } from './core/source-policy';
 import { SecureDownloader } from './core/downloader';
 import { SecureExtractor } from './core/extractor';
@@ -43,9 +45,13 @@ const SOURCE_ADAPTER_COLLECTION = 'SOURCE_ADAPTER_COLLECTION';
 
 @Module({
   imports: [TypeOrmModule.forFeature([ImportJobEntity])],
-  controllers: [GameImportsController, ConsoleController],
+  // SettingsController must be registered BEFORE GameImportsController:
+  // its literal `/game-imports/settings` routes would otherwise be shadowed
+  // by the dynamic `GET /game-imports/:id` route.
+  controllers: [SettingsController, GameImportsController, ConsoleController],
   providers: [
     GameImportsService,
+    SettingsService,
     GameImporterService,
     {
       provide: GAME_BROWSER_OPENER,
