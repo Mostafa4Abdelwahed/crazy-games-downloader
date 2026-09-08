@@ -21,9 +21,13 @@ import {
   toStreamingAssetsPackagePath,
 } from './unity.streaming-assets';
 import {
-  catalogPackagePath,
-  extractCatalogInternalIds,
   addressablesPackagePath,
+  catalogPackagePath,
+  expandRuntimePath,
+  extractCatalogInternalIds,
+  extractCatalogLocations,
+  isAddressablesCatalog,
+  isAddressablesSettings,
   rewriteCatalogIds,
 } from './unity.addressables';
 
@@ -396,12 +400,23 @@ export class UnityStreamingAssetsDiscovery {
   /**
    * Download an Addressables content tree (generic M3.3).
    *
-   * Probes the candidate catalog URLs in order (policy-gated, bounded);
-   * the first response that parses as an Addressables catalog wins. A
-   * missing/unparsable catalog is NORMAL for non-Addressables games and
-   * simply yields no files. Entries are downloaded through the same
-   * policy/SSRF-guarded pipeline and caps as bank dependencies; the
-   * packaged catalog is rewritten so packaged IDs resolve locally.
+   * Two-stage bootstrap: probe `<base>/aa/settings.json` for the
+   * ResourceManagerRuntimeData payload (`m_CatalogLocations`), follow its
+   * catalog location(s) to the real content catalog, then download the
+   * bundles the catalog names. If a candidate is itself a content catalog
+   * (object-shape `m_ResourceLocators` or packed `m_InternalIds`) it is
+   * used directly. A missing/unparsable bootstrap is NORMAL for
+   * non-Addressables games and simply yields no files.
+   *
+   * - `settings.json` (when present) is packaged verbatim — the runtime
+   *   re-resolves its catalog-location placeholders locally.
+   * - Bundle URLs are expanded from Unity runtime-path placeholders and
+   *   downloaded through the same policy/SSRF-guarded pipeline and caps
+   *   as bank dependencies.
+   * - Object-shape catalogs are rewritten so packaged IDs resolve
+   *   locally; packed v1.x catalogs are packaged verbatim (their packed
+   *   index strings reference `m_InternalIds` BY POSITION — never
+   *   reorder/remove entries).
    */
   async downloadAddressablesTree(input: {
     candidateCatalogUrls: string[];
@@ -433,74 +448,190 @@ export class UnityStreamingAssetsDiscovery {
     emit({
       level: 'info',
       code: DiagnosticCode.UNITY_ADDRESSABLES_DISCOVERY_STARTED,
-      message: `Probing ${input.candidateCatalogUrls.length} Addressables catalog candidate(s)`,
+      message: `Probing ${input.candidateCatalogUrls.length} Addressables bootstrap candidate(s)`,
       details: { candidates: input.candidateCatalogUrls.length },
     });
 
-    let catalogUrl: string | null = null;
-    let catalogText: string | null = null;
-    for (const url of input.candidateCatalogUrls) {
+    // Policy/SSRF-guarded text fetch used for the small bootstrap files.
+    const fetchText = async (
+      url: string,
+      maxBytes: number,
+    ): Promise<{ finalUrl: string; text: string } | null> => {
       if (!/^https?:/i.test(url) || !this.policy.isAllowed(url).allowed) {
-        continue;
+        return null;
       }
       try {
         const res = await this.downloader.fetchBuffer(url, {
           timeoutMs: Math.min(timeoutMs, 60_000),
-          maxBytes: Math.min(5_000_000, maxTotalBytes),
+          maxBytes: Math.min(5_000_000, maxBytes),
         });
         this.policy.assertAllowed(res.finalUrl);
-        const text = res.body.toString('utf8');
-        const parsed: unknown = JSON.parse(text);
-        if (
-          !parsed ||
-          typeof parsed !== 'object' ||
-          !Array.isArray(
-            (parsed as Record<string, unknown>)['m_ResourceLocators'],
-          )
-        ) {
-          continue;
-        }
-        catalogUrl = res.finalUrl;
-        catalogText = text;
-        break;
+        return { finalUrl: res.finalUrl, text: res.body.toString('utf8') };
+      } catch {
+        return null;
+      }
+    };
+
+    const files: StreamingDownloadResult['files'] = [];
+    let totalBytes = 0;
+    let limitReached = false;
+    const pushFile = async (
+      packagePath: string,
+      bytes: Buffer,
+      sourceUrl: string,
+    ): Promise<boolean> => {
+      if (
+        files.length >= maxFiles ||
+        totalBytes + bytes.length > maxTotalBytes
+      ) {
+        limitReached = true;
+        return false;
+      }
+      try {
+        await input.writeFile(packagePath, bytes);
+        totalBytes += bytes.length;
+        files.push({
+          path: packagePath,
+          bytes: bytes.length,
+          sourceUrl,
+        });
+        return true;
+      } catch (err) {
+        emit({
+          level: 'warning',
+          code: DiagnosticCode.UNITY_STREAMING_ASSET_DOWNLOAD_FAILED,
+          message: `Addressables file write failed: ${packagePath}`,
+          details: { reason: (err as Error).message.slice(0, 300) },
+        });
+        return true;
+      }
+    };
+
+    // Stage 1: locate the RuntimeData bootstrap (settings.json) or, in
+    // rare cases, a direct content catalog at one of the candidates.
+    let settingsUrl: string | null = null;
+    let settingsText: string | null = null;
+    let catalogUrl: string | null = null;
+    let catalogText: string | null = null;
+    let catalogShape: 'object' | 'packed' | null = null;
+    for (const url of input.candidateCatalogUrls) {
+      const hit = await fetchText(url, maxTotalBytes);
+      if (!hit) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(hit.text);
       } catch {
         continue;
       }
+      if (isAddressablesSettings(parsed)) {
+        settingsUrl = hit.finalUrl;
+        settingsText = hit.text;
+        emit({
+          level: 'info',
+          code: DiagnosticCode.UNITY_ADDRESSABLES_SETTINGS_FOUND,
+          message: 'Addressables RuntimeData bootstrap found (settings.json)',
+          details: { url: safeUrlForLog(hit.finalUrl) },
+        });
+        break;
+      }
+      if (isAddressablesCatalog(parsed)) {
+        catalogUrl = hit.finalUrl;
+        catalogText = hit.text;
+        catalogShape = Array.isArray(
+          (parsed as Record<string, unknown>)['m_ResourceLocators'],
+        )
+          ? 'object'
+          : 'packed';
+        break;
+      }
     }
-    if (!catalogUrl || catalogText === null) {
+    if (!settingsText && !catalogText) {
       emit({
         level: 'info',
         code: DiagnosticCode.UNITY_ADDRESSABLES_CATALOG_MISSING,
         message:
-          'No Addressables catalog reachable; skipping Addressables tree (normal for non-Addressables games)',
+          'No Addressables bootstrap reachable; skipping Addressables tree (normal for non-Addressables games)',
       });
       return { ...empty, diagnostics: collector.all() };
     }
 
-    const ids = extractCatalogInternalIds(JSON.parse(catalogText));
+    // Stage 2: package the settings.json bootstrap (verbatim) and follow
+    // its catalog location(s) to the real content catalog.
+    if (settingsText !== null && settingsUrl) {
+      const settingsPkgPath = catalogPackagePath(settingsUrl);
+      await pushFile(
+        settingsPkgPath,
+        Buffer.from(settingsText, 'utf8'),
+        settingsUrl,
+      );
+      const aaDirUrl = new URL('.', settingsUrl).toString();
+      const locs = extractCatalogLocations(JSON.parse(settingsText));
+      for (const loc of locs) {
+        const expanded = expandRuntimePath(loc, aaDirUrl);
+        let abs: string;
+        try {
+          abs = new URL(expanded, settingsUrl).toString();
+        } catch {
+          continue;
+        }
+        const hit = await fetchText(abs, maxTotalBytes);
+        if (!hit) continue;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(hit.text);
+        } catch {
+          continue;
+        }
+        if (!isAddressablesCatalog(parsed)) continue;
+        catalogUrl = hit.finalUrl;
+        catalogText = hit.text;
+        catalogShape = Array.isArray(
+          (parsed as Record<string, unknown>)['m_ResourceLocators'],
+        )
+          ? 'object'
+          : 'packed';
+        break;
+      }
+    }
+    if (!catalogText || !catalogUrl) {
+      emit({
+        level: 'warning',
+        code: DiagnosticCode.UNITY_ADDRESSABLES_CATALOG_MISSING,
+        message:
+          'Addressables bootstrap found but no content catalog unreachable; packaging bootstrap only',
+        details: settingsUrl ? { settingsUrl: safeUrlForLog(settingsUrl) } : {},
+      });
+      if (files.length === 0) return { ...empty, diagnostics: collector.all() };
+      return { files, totalBytes, limitReached, diagnostics: collector.all() };
+    }
+
+    const parsedCatalog: unknown = JSON.parse(catalogText);
+    const ids = extractCatalogInternalIds(parsedCatalog);
     emit({
       level: 'info',
       code: DiagnosticCode.UNITY_ADDRESSABLES_CATALOG_FOUND,
-      message: `Addressables catalog found with ${ids.length} entr${ids.length === 1 ? 'y' : 'ies'}`,
+      message: `Addressables catalog found with ${ids.length} identif${ids.length === 1 ? 'y' : 'ies'}`,
       details: {
         url: safeUrlForLog(catalogUrl),
         entries: ids.length,
       },
     });
 
-    const files: StreamingDownloadResult['files'] = [];
-    let totalBytes = 0;
-    let limitReached = false;
+    // The aa/ directory used for runtime-path placeholder expansion.
+    const catalogAaDir = new URL('.', settingsUrl ?? catalogUrl).toString();
     const packagedById = new Map<string, string>();
-    // Reserve one slot + catalog bytes for the rewritten catalog itself.
+    // Stage 3: download every bundle the catalog names. One file slot is
+    // reserved for the catalog itself (settings.json already took a slot
+    // when a bootstrap was found), so bundles never starve it.
     for (const id of ids) {
       if (files.length + 1 >= maxFiles || totalBytes >= maxTotalBytes) {
         limitReached = true;
         break;
       }
+      const expanded = expandRuntimePath(id, catalogAaDir);
       let abs: string;
       try {
-        abs = new URL(id, catalogUrl).toString();
+        abs = new URL(expanded, catalogUrl).toString();
       } catch {
         continue;
       }
@@ -536,13 +667,8 @@ export class UnityStreamingAssetsDiscovery {
           limitReached = true;
           break;
         }
-        await input.writeFile(pkgPath, res.body);
-        totalBytes += res.body.length;
-        files.push({
-          path: pkgPath,
-          bytes: res.body.length,
-          sourceUrl: res.finalUrl,
-        });
+        const ok = await pushFile(pkgPath, res.body, res.finalUrl);
+        if (!ok) break;
         packagedById.set(id, pkgPath);
         emit({
           level: 'info',
@@ -563,32 +689,24 @@ export class UnityStreamingAssetsDiscovery {
       }
     }
 
-    // Write the (possibly ID-rewritten) catalog itself.
+    // Stage 4: write the catalog itself — object shape IDs rewritten to
+    // package-relative paths, packed v1.x catalogs verbatim (runtime
+    // placeholders re-evaluate against the packaged streamingAssetsUrl).
     const catalogPkgPath = catalogPackagePath(catalogUrl);
-    const rewritten =
-      rewriteCatalogIds(catalogText, catalogPkgPath, packagedById) ??
-      catalogText;
-    const catalogBytes = Buffer.from(rewritten, 'utf8');
-    if (!limitReached && totalBytes + catalogBytes.length <= maxTotalBytes) {
-      try {
-        await input.writeFile(catalogPkgPath, catalogBytes);
-        totalBytes += catalogBytes.length;
-        files.unshift({
-          path: catalogPkgPath,
-          bytes: catalogBytes.length,
-          sourceUrl: catalogUrl,
-        });
-      } catch (err) {
-        emit({
-          level: 'warning',
-          code: DiagnosticCode.UNITY_STREAMING_ASSET_DOWNLOAD_FAILED,
-          message: `Addressables catalog write failed: ${catalogPkgPath}`,
-          details: { reason: (err as Error).message.slice(0, 300) },
-        });
-      }
-    } else {
-      limitReached = true;
-    }
+    const catalogBytes = Buffer.from(
+      catalogShape === 'object'
+        ? (rewriteCatalogIds(catalogText, catalogPkgPath, packagedById) ??
+            catalogText)
+        : catalogText,
+      'utf8',
+    );
+    const wroteCatalog = await pushFile(
+      catalogPkgPath,
+      catalogBytes,
+      catalogUrl,
+    );
+    if (!wroteCatalog && files.length >= maxFiles) limitReached = true;
+
     if (limitReached) {
       emit({
         level: 'warning',

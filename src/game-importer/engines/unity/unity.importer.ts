@@ -18,7 +18,7 @@ import { UnityAssetResolver } from './unity.asset-resolver';
 import { UnityConfigDiscovery } from './unity.config-discovery';
 import { UnityDecompressor } from './unity.decompressor';
 import { UnityStreamingAssetsDiscovery } from './unity.streaming-assets-discovery';
-import { catalogCandidates, mentionsAddressables } from './unity.addressables';
+import { catalogCandidates } from './unity.addressables';
 import {
   STREAMING_ASSETS_SEGMENT,
   defaultStreamingAssetsOptions,
@@ -467,16 +467,15 @@ export class UnityImporter implements GameEngineImporter {
 
     // 5c. Addressables content tree: games using Unity Addressables fetch
     // a content catalog (`StreamingAssets/aa/settings.json`) and its
-    // bundles long after boot (gameplay start), so neither static scans
-    // nor boot observation can see them. The catalog is located by probe
-    // and its entries downloaded through the same guarded pipeline.
+    // bundles long after boot (gameplay start). The Addressables runtime
+    // is often compiled into the WASM binary, so there is no reliable
+    // text signal — the catalog probe itself is the signal; a missing
+    // catalog simply skips this phase. Runs unconditionally and bounded.
     {
       const already = new Set(streamingFiles.map((s) => s.path));
       const extra = await this.discoverAddressablesTree({
         signal: resolved.streamingAssetsUrl,
         configBaseUrl: discovered.configBaseUrl,
-        loaderJs,
-        downloaded,
         already,
         pkgDir,
         limits,
@@ -904,15 +903,15 @@ export class UnityImporter implements GameEngineImporter {
   /**
    * Addressables content-tree phase (generic, M3.3).
    *
-   * Gated on an Addressables signal in already-downloaded text (loader or
-   * framework); without it, probing is skipped silently. A missing catalog
-   * is normal for non-Addressables games.
+   * Runs unconditionally for Unity games: the Addressables runtime is
+   * often compiled into the WASM binary, so no text signal (loader or
+   * framework) is reliable. The catalog probe itself is the signal — a
+   * missing catalog is normal for non-Addressables games and simply
+   * skips silently after bounded, policy-gated probing.
    */
   private async discoverAddressablesTree(args: {
     signal?: string;
     configBaseUrl: string;
-    loaderJs: string;
-    downloaded: { url: string; filePath: string }[];
     already: Set<string>;
     pkgDir: string;
     limits: ImportLimits;
@@ -923,37 +922,7 @@ export class UnityImporter implements GameEngineImporter {
       details?: Record<string, unknown>,
     ) => void;
   }): Promise<{ path: string; sourceUrl: string }[]> {
-    const {
-      signal,
-      configBaseUrl,
-      loaderJs,
-      downloaded,
-      already,
-      pkgDir,
-      limits,
-      emit,
-    } = args;
-    if (mentionsAddressables(loaderJs)) {
-      /* signal in loader — proceed below */
-    } else {
-      let found = false;
-      for (const d of downloaded) {
-        if (!/\.framework\.js$/i.test(d.filePath)) continue;
-        try {
-          const text = await fs.promises.readFile(d.filePath, 'utf8');
-          if (
-            mentionsAddressables(text.slice(0, 1_000_000)) ||
-            mentionsAddressables(d.url)
-          ) {
-            found = true;
-            break;
-          }
-        } catch {
-          /* unreadable — no signal from this file */
-        }
-      }
-      if (!found) return [];
-    }
+    const { signal, configBaseUrl, already, pkgDir, limits, emit } = args;
     const svc =
       this.streamingAssets ??
       new UnityStreamingAssetsDiscovery(this.downloader, this.policy);

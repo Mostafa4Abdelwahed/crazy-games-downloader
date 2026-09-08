@@ -7,7 +7,11 @@ import {
   addressablesPackagePath,
   catalogCandidates,
   catalogPackagePath,
+  expandRuntimePath,
   extractCatalogInternalIds,
+  extractCatalogLocations,
+  isAddressablesCatalog,
+  isAddressablesSettings,
   mentionsAddressables,
   rewriteCatalogIds,
 } from './unity.addressables';
@@ -74,6 +78,74 @@ describe('unity addressables pure helpers', () => {
     expect(extractCatalogInternalIds({ m_ResourceLocators: 'nope' })).toEqual(
       [],
     );
+  });
+
+  it('extracts internal IDs from the packed v1.x ContentCatalogData shape', () => {
+    const ids = extractCatalogInternalIds({
+      m_LocatorId: 'AddressablesMainContentCatalog',
+      m_InternalIds: [
+        '{UnityEngine.AddressableAssets.Addressables.RuntimePath}/WebGL/a.bundle',
+        '{UnityEngine.AddressableAssets.Addressables.RuntimePath}/WebGL/a.bundle',
+        'Assets/Levels/0.prefab',
+        42,
+      ],
+      m_KeyDataString: 'AAAA',
+    });
+    expect(ids).toEqual([
+      '{UnityEngine.AddressableAssets.Addressables.RuntimePath}/WebGL/a.bundle',
+      'Assets/Levels/0.prefab',
+    ]);
+  });
+
+  it('extracts catalog locations from RuntimeData settings.json', () => {
+    const locs = extractCatalogLocations({
+      m_buildTarget: 'WebGL',
+      m_CatalogLocations: [
+        {
+          m_Keys: ['AddressablesMainContentCatalog'],
+          m_InternalId:
+            '{UnityEngine.AddressableAssets.Addressables.RuntimePath}/catalog.json',
+        },
+      ],
+      m_AddressablesVersion: '1.22.3',
+    });
+    expect(locs).toEqual([
+      '{UnityEngine.AddressableAssets.Addressables.RuntimePath}/catalog.json',
+    ]);
+  });
+
+  it('classifies Addressables payload shapes', () => {
+    expect(isAddressablesSettings({ m_CatalogLocations: [] })).toBe(true);
+    expect(
+      isAddressablesSettings({
+        m_CatalogLocations: [],
+        m_ResourceLocators: [],
+      }),
+    ).toBe(false);
+    expect(isAddressablesSettings({})).toBe(false);
+    expect(isAddressablesCatalog({ m_ResourceLocators: [] })).toBe(true);
+    expect(isAddressablesCatalog({ m_InternalIds: [] })).toBe(true);
+    expect(isAddressablesCatalog({ m_CatalogLocations: [] })).toBe(false);
+    expect(isAddressablesCatalog(null)).toBe(false);
+  });
+
+  it('expands Unity runtime-path placeholders to the aa/ directory', () => {
+    expect(
+      expandRuntimePath(
+        '{UnityEngine.AddressableAssets.Addressables.RuntimePath}/WebGL/a.bundle',
+        'https://cdn.example/g/90/StreamingAssets/aa',
+      ),
+    ).toBe('https://cdn.example/g/90/StreamingAssets/aa/WebGL/a.bundle');
+    expect(
+      expandRuntimePath(
+        '{UnityEngine.AddressableAssets.Addressables.RuntimePath}/catalog.json',
+        'https://cdn.example/g/90/StreamingAssets/aa/',
+      ),
+    ).toBe('https://cdn.example/g/90/StreamingAssets/aa/catalog.json');
+    // No placeholder → unchanged.
+    expect(
+      expandRuntimePath('aa/Android/ember.bundle', 'https://cdn.example/aa/'),
+    ).toBe('aa/Android/ember.bundle');
   });
 
   it('maps catalog/entry URLs to canonical package paths', () => {
@@ -218,8 +290,7 @@ describe('unity addressables tree download', () => {
     expect(res.files.map((f) => f.path)).toContain(
       'StreamingAssets/aa/Android/b.bundle',
     );
-    // Catalog itself is written first with rewritten IDs.
-    expect(res.files[0].path).toBe('StreamingAssets/aa/settings.json');
+    // Catalog is present and its IDs are rewritten to catalog-relative.
     const catalog = JSON.parse(
       (written.get('StreamingAssets/aa/settings.json') as Buffer).toString(
         'utf8',
@@ -234,6 +305,101 @@ describe('unity addressables tree download', () => {
     expect(codes).toContain(DiagnosticCode.UNITY_ADDRESSABLES_CATALOG_FOUND);
     expect(codes).toContain(
       DiagnosticCode.UNITY_ADDRESSABLES_DISCOVERY_COMPLETED,
+    );
+  });
+
+  it('handles two-stage bootstrap: settings.json → packed catalog → bundles', async () => {
+    const SETTINGS_URL =
+      'https://cdn.example/g/90/StreamingAssets/aa/settings.json';
+    const CATALOG_URL_PACKED =
+      'https://cdn.example/g/90/StreamingAssets/aa/catalog.json';
+    const RT = '{UnityEngine.AddressableAssets.Addressables.RuntimePath}';
+    const SETTINGS = JSON.stringify({
+      m_buildTarget: 'WebGL',
+      m_CatalogLocations: [{ m_InternalId: `${RT}/catalog.json` }],
+      m_AddressablesVersion: '1.22.3',
+    });
+    const CATALOG = JSON.stringify({
+      m_LocatorId: 'AddressablesMainContentCatalog',
+      m_InternalIds: [
+        `${RT}/WebGL/level_assets_all_x.bundle`,
+        'Assets/Builtin/shaders',
+        'Assets/Scenes/Game.unity',
+      ],
+    });
+    const BUNDLE_ABS =
+      'https://cdn.example/g/90/StreamingAssets/aa/WebGL/level_assets_all_x.bundle';
+    const d = discoveryWith({
+      [SETTINGS_URL]: Buffer.from(SETTINGS),
+      [CATALOG_URL_PACKED]: Buffer.from(CATALOG),
+      [BUNDLE_ABS]: Buffer.from('bundle-bytes'),
+    });
+    const written = new Map<string, Buffer>();
+    const res = await d.downloadAddressablesTree({
+      candidateCatalogUrls: [SETTINGS_URL],
+      writeFile: async (p, bytes) => {
+        written.set(p, bytes);
+      },
+    });
+    // Settings, catalog, and the one .bundle file are packaged.
+    expect(res.files.map((f) => f.path)).toContain(
+      'StreamingAssets/aa/settings.json',
+    );
+    expect(res.files.map((f) => f.path)).toContain(
+      'StreamingAssets/aa/catalog.json',
+    );
+    expect(res.files.map((f) => f.path)).toContain(
+      'StreamingAssets/aa/WebGL/level_assets_all_x.bundle',
+    );
+    // Legacy Assets/... refs are skipped (no download attempt).
+    expect(res.files.map((f) => f.path)).not.toContain(
+      expect.stringContaining('Assets/'),
+    );
+    // Catalog is written verbatim (packed shape — no ID rewrite).
+    const cat = JSON.parse(
+      (written.get('StreamingAssets/aa/catalog.json') as Buffer).toString(
+        'utf8',
+      ),
+    );
+    expect(cat.m_InternalIds[0]).toBe(`${RT}/WebGL/level_assets_all_x.bundle`);
+    // Settings is written verbatim.
+    const st = JSON.parse(
+      (written.get('StreamingAssets/aa/settings.json') as Buffer).toString(
+        'utf8',
+      ),
+    );
+    expect(st.m_AddressablesVersion).toBe('1.22.3');
+    const codes = res.diagnostics.map((x) => x.code);
+    expect(codes).toContain(DiagnosticCode.UNITY_ADDRESSABLES_SETTINGS_FOUND);
+    expect(codes).toContain(DiagnosticCode.UNITY_ADDRESSABLES_CATALOG_FOUND);
+    expect(codes).toContain(
+      DiagnosticCode.UNITY_ADDRESSABLES_DISCOVERY_COMPLETED,
+    );
+  });
+
+  it('packages bootstrap only when catalog location is unreachable', async () => {
+    const SETTINGS_URL =
+      'https://cdn.example/g/90/StreamingAssets/aa/settings.json';
+    const RT = '{UnityEngine.AddressableAssets.Addressables.RuntimePath}';
+    const SETTINGS = JSON.stringify({
+      m_CatalogLocations: [{ m_InternalId: `${RT}/catalog.json` }],
+    });
+    const d = discoveryWith({
+      [SETTINGS_URL]: Buffer.from(SETTINGS),
+    });
+    const written = new Map<string, Buffer>();
+    const res = await d.downloadAddressablesTree({
+      candidateCatalogUrls: [SETTINGS_URL],
+      writeFile: async (p, bytes) => {
+        written.set(p, bytes);
+      },
+    });
+    expect(written.has('StreamingAssets/aa/settings.json')).toBe(true);
+    expect(res.files.map((f) => f.path)).toContain(
+      'StreamingAssets/aa/settings.json',
+    );
+    expect(res.diagnostics.map((x) => x.code)).toContain(
+      DiagnosticCode.UNITY_ADDRESSABLES_CATALOG_MISSING,
     );
   });
 

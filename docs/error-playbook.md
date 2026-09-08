@@ -144,8 +144,7 @@ Entry format for every record:
 
 ## UNITY-ADDR-001 — Addressables 404 (`aa/settings.json`) long after boot
 
-- **Status:** solved (mechanism merged; awaiting a reachable real catalog
-  for end-to-end confirmation — remote catalogs seen so far 404, see note)
+- **Status:** solved (mechanism merged, verified on Drive Quest — see below)
 - **Symptoms:** Healthy boot (all build assets 200, FMOD fine), then much
   later — typically at gameplay start — `GET …/StreamingAssets/aa/
   settings.json → 404`, followed by `RemoteProviderException:
@@ -160,25 +159,33 @@ Entry format for every record:
   by a content catalog the game fetches lazily. Bank-style runtime
   observation can never see these requests (they fire after user
   interaction), and bank-name construction has no filenames to scan — the
-  catalog itself is the only discovery source.
+  catalog itself is the only discovery source. Additionally, the
+  Addressables runtime is usually compiled into the WASM binary, so a
+  text-signal gate on the loader/framework JS (which was the original
+  design) silently skips the phase for many games — the first
+  implementation shipped exactly this and correctly found nothing.
 - **Fix:** Addressables tree phase (`engines/unity/unity.addressables.ts`
   + `downloadAddressablesTree`): probe `<streaming-assets-base>/aa/
   settings.json` candidates (policy-gated, bounded); download the catalog
   plus its `m_InternalId` entries under the canonical
   `StreamingAssets/…` layout; rewrite packaged IDs catalog-relative;
   absolute external IDs are recorded as external references, never bundled.
-  Gated on an Addressables signal in downloaded text; a missing catalog is
-  normal and skips silently-ish (info diagnostic).
+  The phase now runs **unconditionally** for every Unity game (signals in
+  JS text were never reliable — WASM-compiled Addressables is invisible to
+  regex), so the catalog probe itself is the signal. A missing catalog is
+  normal for non-Addressables games and skips silently-ish (info
+  diagnostic `UNITY_ADDRESSABLES_CATALOG_MISSING`), costing at most 2
+  bounded, policy-gated HTTP requests.
 - **Verify:** `StreamingAssets/aa/settings.json` packaged with rewritten
   IDs; served package returns it 200; no `Addressables - Unable to load`
   cascade in the console.
 - **First seen:** 2022.3 Unity racing build served locally (user console
-  log), Sep 2026. NOTE: the remote `aa/` tree 404s on every probed base
-  for current builds — if the content is genuinely unreachable remotely,
-  it cannot be packaged and validation correctly keeps failing; confirm
-  per game from its own source URL.
-- **Needs from operator:** the source game URL of any log showing this
-  cascade, for real end-to-end verification.
+  log), Sep 2026. Drive Quest confirmed end-to-end: catalog exists at
+  `https://files.crazygames.com/drive-quest---car-game/20/v17/
+  StreamingAssets/aa/settings.json` (200) + `aa/catalog.json` (200);
+  NOT at any unversioned base (`…/drive-quest---car-game/StreamingAssets/
+  aa/…` 404) — the versioned path (`20/v17/`) comes from the delivery
+  config's `streamingAssetsUrl`, which is now what the probe uses.
 
 ## OPEN-001 — non-Unity engines in `validate:real`
 
