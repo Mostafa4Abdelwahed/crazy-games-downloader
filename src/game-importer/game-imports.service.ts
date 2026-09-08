@@ -72,11 +72,24 @@ export interface DiscoveredGameView {
 }
 
 /**
+ * Lightweight job row for the management console table. Heavy fields
+ * (logs, diagnostics, error, packageUrl) are fetched separately via
+ * `GET /game-imports/:id` only when a job is actually inspected.
+ */
+export interface ImportJobSummary {
+  id: string;
+  sourceUrl: string;
+  status: ImportState;
+  progress: number;
+  updatedAt: string;
+}
+
+/**
  * Paginated job listing for the management console: one page of jobs plus
  * enough metadata to render Prev/Next and "Page X of Y" controls.
  */
 export interface ImportJobPage {
-  items: ImportJob[];
+  items: ImportJobSummary[];
   total: number;
   page: number;
   pageSize: number;
@@ -115,6 +128,22 @@ function toJob(e: ImportJobEntity): ImportJob {
     diagnostics: toDiagnostics(e.diagnostics),
     packageUrl: e.packageUrl,
     createdAt: e.createdAt?.toISOString?.() ?? new Date().toISOString(),
+    updatedAt: e.updatedAt?.toISOString?.() ?? new Date().toISOString(),
+  };
+}
+
+/**
+ * Lightweight job row for the console table. Heavy payloads (logs,
+ * diagnostics, error, packageUrl) are deliberately omitted — a page of
+ * N rows must not drag all their details along; the console fetches them
+ * per-job via `GET /game-imports/:id` when a row is actually inspected.
+ */
+function toJobSummary(e: ImportJobEntity): ImportJobSummary {
+  return {
+    id: e.id,
+    sourceUrl: e.sourceUrl,
+    status: e.status,
+    progress: e.progress,
     updatedAt: e.updatedAt?.toISOString?.() ?? new Date().toISOString(),
   };
 }
@@ -352,7 +381,7 @@ export class GameImportsService implements OnModuleInit {
       take: pageSize,
     });
     return {
-      items: entities.map(toJob),
+      items: entities.map(toJobSummary),
       total,
       page: cur,
       pageSize,

@@ -339,4 +339,33 @@ describe('GameImportsService list pagination', () => {
       take: 50,
     });
   });
+
+  it('returns lightweight table rows, not heavy job payloads', async () => {
+    const full = toEntity({
+      id: 'heavy',
+      logs: [{ at: 'x', level: 'info', message: 'm' }],
+      diagnostics: [{ level: 'error' as const, code: 'X', message: 'boom' }],
+      packageUrl: '/srv/out/heavy',
+      error: 'something failed',
+      currentStep: 'downloading',
+      detectedEngine: 'unity',
+    });
+    const { service } = makeService({
+      findAndCount: jest.fn(async () => [[full], 1] as unknown[]),
+    });
+    const res = await service.list();
+    expect(res.items).toHaveLength(1);
+    expect(res.items[0]).toEqual({
+      id: 'heavy',
+      sourceUrl: 'https://www.crazygames.com/game/foo',
+      status: 'queued',
+      progress: 0,
+      updatedAt: expect.any(String),
+    });
+    // Heavy fields stay out of the listing entirely.
+    expect(res.items[0]).not.toHaveProperty('logs');
+    expect(res.items[0]).not.toHaveProperty('diagnostics');
+    expect(res.items[0]).not.toHaveProperty('packageUrl');
+    expect(res.items[0]).not.toHaveProperty('error');
+  });
 });

@@ -112,6 +112,36 @@ describe('management console page', () => {
     expect(html).toContain('id="discoverBtn" class="btn primary"');
   });
 
+  it('fetches job details on click via get-one, not from the listing', () => {
+    const html = renderConsolePage();
+    // The table renders only row fields; heavy detail comes from a dedicated
+    // per-job request (plus logs) when a row is selected.
+    expect(html).toContain('/game-imports?page=');
+    expect(html).toContain('j.sourceUrl');
+    expect(html).toContain('j.progress');
+    expect(html).toContain('j.updatedAt');
+    expect(html).toContain('"/game-imports/" + encodeURIComponent(selectedId)');
+    expect(html).toContain(
+      '"/game-imports/" + encodeURIComponent(selectedId) + "/logs"',
+    );
+  });
+
+  it('polls the job list only while jobs are in flight, never when idle', () => {
+    const html = renderConsolePage();
+    // The only loadJobs interval anywhere is the one inside startPoll(),
+    // which runs only when a fetched page contains an in-flight status.
+    const loadJobsIntervals =
+      html.split('setInterval(loadJobs, 5000)').length - 1;
+    expect(loadJobsIntervals).toBe(1);
+    expect(html).toContain('pollTimer = setInterval(loadJobs, 5000)');
+    expect(html).toContain('function startPoll()');
+    expect(html).toContain('function stopPoll()');
+    expect(html).toContain('IN_FLIGHT.indexOf(j.status) >= 0');
+    // stopPoll clears the timer; startPoll guards against double timers.
+    expect(html).toContain('clearInterval(pollTimer)');
+    expect(html).toContain('if (pollTimer) return;');
+  });
+
   it('is styled with the CrazyGames-inspired design system', () => {
     const html = renderConsolePage();
     // Design tokens from the game-portal theme.

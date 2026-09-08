@@ -269,10 +269,12 @@ export function renderConsolePage(): string {
     '  "use strict";\n' +
     '  var selectedId = null;\n' +
     '  var activeTimer = null;\n' +
+    '  var pollTimer = null;\n' +
     '  var jobPage = 1;\n' +
     '  var jobPageSize = 50;\n' +
     '  var jobTotal = 0;\n' +
     '  var jobTotalPages = 1;\n' +
+    '  var IN_FLIGHT = ["queued", "detecting", "resolving", "downloading", "extracting", "validating", "uploading"];\n' +
     '  var COPY_ICON = "<svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><rect x=\\"9\\" y=\\"9\\" width=\\"13\\" height=\\"13\\" rx=\\"2\\"/><path d=\\"M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1\\"/></svg>";\n' +
     '  var CHECK_ICON = "<svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><path d=\\"M20 6L9 17l-5-5\\"/></svg>";\n' +
     '  var SUN_ICON = "<svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><circle cx=\\"12\\" cy=\\"12\\" r=\\"5\\"/><line x1=\\"12\\" y1=\\"1\\" x2=\\"12\\" y2=\\"3\\"/><line x1=\\"12\\" y1=\\"21\\" x2=\\"12\\" y2=\\"23\\"/><line x1=\\"4.22\\" y1=\\"4.22\\" x2=\\"5.64\\" y2=\\"5.64\\"/><line x1=\\"18.36\\" y1=\\"18.36\\" x2=\\"19.78\\" y2=\\"19.78\\"/><line x1=\\"1\\" y1=\\"12\\" x2=\\"3\\" y2=\\"12\\"/><line x1=\\"21\\" y1=\\"12\\" x2=\\"23\\" y2=\\"12\\"/><line x1=\\"4.22\\" y1=\\"19.78\\" x2=\\"5.64\\" y2=\\"18.36\\"/><line x1=\\"18.36\\" y1=\\"5.64\\" x2=\\"19.78\\" y2=\\"4.22\\"/></svg>";\n' +
@@ -329,9 +331,22 @@ export function renderConsolePage(): string {
     '      Array.prototype.forEach.call(tb.querySelectorAll("tr.job"), function (tr) {\n' +
     '        tr.addEventListener("click", function () { selectJob(tr.getAttribute("data-id")); });\n' +
     '      });\n' +
+    '      // Poll only while something is actually running; stay silent when idle.\n' +
+    '      if (jobs.some(function (j) { return IN_FLIGHT.indexOf(j.status) >= 0; })) {\n' +
+    '        startPoll();\n' +
+    '      } else {\n' +
+    '        stopPoll();\n' +
+    '      }\n' +
     '    }).catch(function (e) {\n' +
     '      document.getElementById("jobRows").innerHTML = "<tr><td colspan=\\"5\\" class=\\"err\\">" + esc(e.message) + "</td></tr>";\n' +
     '    });\n' +
+    '  }\n' +
+    '  function startPoll() {\n' +
+    '    if (pollTimer) return;\n' +
+    '    pollTimer = setInterval(loadJobs, 5000);\n' +
+    '  }\n' +
+    '  function stopPoll() {\n' +
+    '    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }\n' +
     '  }\n' +
     '  function renderJobsPager() {\n' +
     '    var info = document.getElementById("jobsPageInfo");\n' +
@@ -599,7 +614,6 @@ export function renderConsolePage(): string {
     '  initTheme();\n' +
     '  loadJobs();\n' +
     '  renderJobsPager();\n' +
-    '  setInterval(loadJobs, 5000);\n' +
     '})();\n' +
     '</script>\n' +
     '</body>\n' +
