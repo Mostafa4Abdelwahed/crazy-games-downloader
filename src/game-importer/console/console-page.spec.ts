@@ -207,6 +207,31 @@ describe('management console page', () => {
     expect(html.split('jobPage = 1;').length - 1).toBeGreaterThanOrEqual(3);
   });
 
+  it('searches jobs by game URL with a debounced input', () => {
+    const html = renderConsolePage();
+    // Search box sits in the filters row and searches the source URL.
+    expect(html).toContain('id="searchQ"');
+    expect(html).toContain('Search by game URL');
+    expect(html).toContain(
+      'if (jobSearchQ) q += "&q=" + encodeURIComponent(jobSearchQ)',
+    );
+    // Debounced so it does not fire a request on every keystroke.
+    expect(html).toContain('setTimeout(function () {');
+    expect(html).toContain('}, 300)');
+    expect(html).toContain('clearTimeout(searchTimer)');
+  });
+
+  it('retries every failed game in the folder from the filters row', () => {
+    const html = renderConsolePage();
+    expect(html).toContain('id="retryFailedBtn"');
+    expect(html).toContain('Retry failed');
+    expect(html).toContain('"/game-imports/retry-failed"');
+    expect(html).toContain('body: JSON.stringify({ folderId: FOLDER_ID })');
+    // Reports how many were retried (or that there was nothing to do).
+    expect(html).toContain('Retried " + r.retried + " failed game');
+    expect(html).toContain('No failed games to retry in this folder.');
+  });
+
   it('polls the job list only while jobs are in flight, never when idle', () => {
     const html = renderConsolePage();
     // The only loadJobs interval anywhere is the one inside startPoll(),

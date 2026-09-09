@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Repository } from 'typeorm';
 import { ImportJobEntity } from '../entities/import-job.entity';
+import { dirUsage } from '../storage/disk-usage';
 
 /**
  * Read-only view of every project-wide runtime setting (environment
@@ -41,7 +42,13 @@ export interface SettingsView {
     streamingAssetsLocalDiscovery: boolean;
     python: string;
   };
-  stats: { jobs: number; packages: number; workDirs: number };
+  stats: {
+    jobs: number;
+    packages: number;
+    workDirs: number;
+    packagesBytes: number;
+    workBytes: number;
+  };
 }
 
 const ON = (v: string | undefined, fallback = false): boolean =>
@@ -209,7 +216,7 @@ export class SettingsService {
     return cleared;
   }
 
-  /** Job/package/work counts for the stats card. */
+  /** Job/package/work counts + on-disk usage for the stats card. */
   private async stats(): Promise<SettingsView['stats']> {
     let jobsCount = 0;
     try {
@@ -217,10 +224,20 @@ export class SettingsService {
     } catch {
       jobsCount = 0;
     }
+    const storageRoot = this.storageRoot();
+    const workRoot = this.workRoot();
+    const [packages, workDirs, packagesUsage, workUsage] = await Promise.all([
+      this.countChildren(storageRoot),
+      this.countChildren(workRoot),
+      dirUsage(storageRoot),
+      dirUsage(workRoot),
+    ]);
     return {
       jobs: jobsCount,
-      packages: await this.countChildren(this.storageRoot()),
-      workDirs: await this.countChildren(this.workRoot()),
+      packages,
+      workDirs,
+      packagesBytes: packagesUsage.bytes,
+      workBytes: workUsage.bytes,
     };
   }
 

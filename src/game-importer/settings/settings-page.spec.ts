@@ -50,6 +50,12 @@ describe('settings page', () => {
     expect(html).toContain('class="active"');
   });
 
+  it('shows on-disk usage next to the package and work counts', () => {
+    const html = renderSettingsPage();
+    expect(html).toContain('fmtBytes(s.stats.packagesBytes || 0)');
+    expect(html).toContain('fmtBytes(s.stats.workBytes || 0)');
+  });
+
   it('never executes game code or inlines untrusted URLs', () => {
     const html = renderSettingsPage();
     expect(html).not.toContain('eval(');

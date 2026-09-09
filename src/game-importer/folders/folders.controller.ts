@@ -3,11 +3,15 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   Param,
   Patch,
   Post,
+  Query,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import {
   AssignJobDto,
   CreateFolderDto,
@@ -25,8 +29,22 @@ export class FoldersController {
   constructor(private readonly folders: FoldersService) {}
 
   @Get()
-  list() {
-    return this.folders.list();
+  list(@Query('storage') storage?: string) {
+    return this.folders.list(storage === 'true' || storage === '1');
+  }
+
+  // NOTE: static route registered before `:id` so "export" is never
+  // captured as a folder id (same shadowing trap as /console/settings).
+  @Get('export')
+  @Header('Content-Type', 'application/json; charset=utf-8')
+  async exportBackup(@Res() res: Response) {
+    const backup = await this.folders.exportBackup();
+    const day = backup.exportedAt.slice(0, 10);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="game-folders-backup-${day}.json"`,
+    );
+    res.send(JSON.stringify(backup, null, 2));
   }
 
   @Get(':id')

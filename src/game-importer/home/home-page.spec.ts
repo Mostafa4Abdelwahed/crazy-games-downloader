@@ -45,6 +45,24 @@ describe('home page (folders)', () => {
     expect(html).toContain('href="/console/none"');
   });
 
+  it('shows per-folder disk usage fetched with storage', () => {
+    const html = renderHomePage();
+    // Sizes come from the storage-enriched listing, rendered as a chip.
+    expect(html).toContain('api("/folders?storage=true")');
+    expect(html).toContain('chip size');
+    expect(html).toContain('fmtBytes(f.storage.bytes)');
+    expect(html).toContain('function fmtBytes(v)');
+  });
+
+  it('exports the library backup as a downloaded JSON file', () => {
+    const html = renderHomePage();
+    expect(html).toContain('id="exportBtn"');
+    expect(html).toContain('Export backup (JSON)');
+    expect(html).toContain('api("/folders/export")');
+    expect(html).toContain('game-folders-backup-');
+    expect(html).toContain('application/json');
+  });
+
   it('never executes game code or inlines untrusted URLs', () => {
     const html = renderHomePage();
     expect(html).not.toContain('eval(');

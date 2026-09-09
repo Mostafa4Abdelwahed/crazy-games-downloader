@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { Repository } from 'typeorm';
 import { GameFolderEntity } from '../entities/game-folder.entity';
 import { ImportJobEntity } from '../entities/import-job.entity';
+import { dirUsage } from '../storage/disk-usage';
 
 /**
  * Folder view rendered on the home page: name, job stats and the real
@@ -22,6 +23,8 @@ export interface FolderView {
   };
   /** Real filesystem root that holds every stored package. */
   packagesRoot: string;
+  /** On-disk usage of this folder's stored packages (opt-in via ?storage). */
+  storage?: { bytes: number; packages: number };
 }
 
 const IN_FLIGHT = [
@@ -51,22 +54,36 @@ export class FoldersService {
     private readonly jobs: Repository<ImportJobEntity>,
   ) {}
 
-  async list(): Promise<FolderView[]> {
+  async list(withStorage = false): Promise<FolderView[]> {
     const rows = await this.folders.find({
       order: { createdAt: 'ASC' },
     });
+    // One disk pass for every stored package (shared by all folders),
+    // keyed by job id so each folder just sums its own slice.
+    const usageByJob = withStorage ? await this.packageUsageByJob() : new Map();
     const views: FolderView[] = [];
     for (const f of rows) {
       const all = await this.jobs.find({
         where: { folderId: f.id },
-        select: ['status'],
+        select: ['id', 'status'],
       });
-      views.push(
-        this.toView(
-          f,
-          all.map((j) => j.status),
-        ),
+      const view = this.toView(
+        f,
+        all.map((j) => j.status),
       );
+      if (withStorage) {
+        let bytes = 0;
+        let packages = 0;
+        for (const j of all) {
+          const u = usageByJob.get(j.id);
+          if (u && (u.bytes > 0 || u.files > 0)) {
+            bytes += u.bytes;
+            packages += 1;
+          }
+        }
+        view.storage = { bytes, packages };
+      }
+      views.push(view);
     }
     return views;
   }
@@ -159,6 +176,80 @@ export class FoldersService {
   /** Real packages root (same root for every folder; shown for copy). */
   packagesRoot(): string {
     return path.resolve(process.env.STORAGE_LOCAL_ROOT ?? './data/packages');
+  }
+
+  /**
+   * Portable backup of the whole library: every folder with its games
+   * (source URL + status), plus ungrouped games. Package files are NOT
+   * included — re-import rebuilds them; this file restores the structure.
+   */
+  async exportBackup(): Promise<{
+    exportedAt: string;
+    folders: {
+      id: string | null;
+      name: string;
+      games: {
+        seq: number | null;
+        sourceUrl: string;
+        status: string;
+        createdAt: string;
+      }[];
+    }[];
+  }> {
+    const folders = await this.folders.find({ order: { createdAt: 'ASC' } });
+    const jobs = await this.jobs.find({ order: { createdAt: 'ASC' } });
+    const byFolder = new Map<string | null, typeof jobs>();
+    for (const j of jobs) {
+      const key = j.folderId ?? null;
+      const arr = byFolder.get(key) ?? [];
+      arr.push(j);
+      byFolder.set(key, arr);
+    }
+    const out: Awaited<ReturnType<FoldersService['exportBackup']>>['folders'] =
+      [];
+    for (const f of folders) {
+      out.push({
+        id: f.id,
+        name: f.name,
+        games: (byFolder.get(f.id) ?? []).map((j) => ({
+          seq: j.seq ?? null,
+          sourceUrl: j.sourceUrl,
+          status: j.status,
+          createdAt: j.createdAt.toISOString(),
+        })),
+      });
+    }
+    const ungrouped = byFolder.get(null) ?? [];
+    if (ungrouped.length) {
+      out.push({
+        id: null,
+        name: 'Ungrouped',
+        games: ungrouped.map((j) => ({
+          seq: j.seq ?? null,
+          sourceUrl: j.sourceUrl,
+          status: j.status,
+          createdAt: j.createdAt.toISOString(),
+        })),
+      });
+    }
+    return { exportedAt: new Date().toISOString(), folders: out };
+  }
+
+  /**
+   * On-disk usage per stored package, keyed by job id. Packages whose
+   * directory is missing (cleared) simply contribute nothing.
+   */
+  private async packageUsageByJob(): Promise<
+    Map<string, { bytes: number; files: number }>
+  > {
+    const out = new Map<string, { bytes: number; files: number }>();
+    const rows = await this.jobs.find({ select: ['id', 'packageUrl'] });
+    for (const j of rows) {
+      if (!j.packageUrl) continue;
+      const usage = await dirUsage(j.packageUrl);
+      if (usage.bytes > 0 || usage.files > 0) out.set(j.id, usage);
+    }
+    return out;
   }
 
   private toView(f: GameFolderEntity, statuses: string[]): FolderView {

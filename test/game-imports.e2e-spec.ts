@@ -68,6 +68,7 @@ describe('Game imports integration', () => {
     ['https://partner.example/games/demo-7']: Buffer.from(ENTRY_HTML),
     ['https://partner.example/games/demo-8']: Buffer.from(ENTRY_HTML),
     ['https://partner.example/games/demo-9']: Buffer.from(ENTRY_HTML),
+    ['https://partner.example/games/demo-10']: Buffer.from(ENTRY_HTML),
     ['https://partner.example/games/Build/test.loader.js']:
       Buffer.from(LOADER_JS),
     ['https://partner.example/games/Build/test.data']: Buffer.from(
@@ -344,6 +345,8 @@ describe('Game imports integration', () => {
         jobs: 0,
         packages: 0,
         workDirs: 0,
+        packagesBytes: 0,
+        workBytes: 0,
       });
     });
 
@@ -560,6 +563,35 @@ describe('Game imports integration', () => {
         .expect(200);
     });
 
+    it('searches jobs by URL substring (q param)', async () => {
+      // demo-4 was created earlier in this suite; search must find only it.
+      const res = await request(app.getHttpServer())
+        .get('/game-imports?q=demo-4&limit=200')
+        .expect(200);
+      expect(res.body.total).toBeGreaterThanOrEqual(1);
+      expect(
+        res.body.items.every((j: any) => j.sourceUrl.includes('demo-4')),
+      ).toBe(true);
+
+      // Search composes with the status filter.
+      const scoped = await request(app.getHttpServer())
+        .get('/game-imports?q=demo-4&status=completed&limit=200')
+        .expect(200);
+      expect(
+        scoped.body.items.every(
+          (j: any) =>
+            j.sourceUrl.includes('demo-4') && j.status === 'completed',
+        ),
+      ).toBe(true);
+
+      // Gibberish matches nothing instead of erroring.
+      const empty = await request(app.getHttpServer())
+        .get('/game-imports?q=no-such-game-anywhere-zzz')
+        .expect(200);
+      expect(empty.body.total).toBe(0);
+      expect(empty.body.items).toEqual([]);
+    });
+
     it('globally dedupes games across folders, reporting where they live', async () => {
       // First import lands in a folder.
       const folder = (
@@ -694,6 +726,119 @@ describe('Game imports integration', () => {
       await waitFor(created.body.id, ['completed', 'failed']);
       // Cleanup runs right after the terminal write; allow it to land.
       await waitGone(path.join(workDir, created.body.id));
+    });
+  });
+
+  describe('retry-failed, storage sizes and export', () => {
+    it('retries every failed game in a folder as forced fresh runs', async () => {
+      const folder = (
+        await request(app.getHttpServer())
+          .post('/folders')
+          .send({ name: 'Retry box' })
+          .expect(201)
+      ).body;
+      // Seed a failed row directly (deterministic, no download involved).
+      const failed = jobs.create({
+        id: randomUUID(),
+        sourceUrl: base,
+        status: 'failed',
+        progress: 0,
+        detectedEngine: null,
+        downloadedFiles: 0,
+        totalFiles: 0,
+        currentStep: 'failed',
+        error: 'boom',
+        packageUrl: null,
+        folderId: folder.id,
+        logs: [],
+      });
+      await jobs.save(failed);
+
+      const res = await request(app.getHttpServer())
+        .post('/game-imports/retry-failed')
+        .send({ folderId: folder.id })
+        .expect(200);
+      expect(res.body.retried).toBe(1);
+      expect(res.body.created).toBe(1);
+      expect(res.body.jobs[0].sourceUrl).toBe(base);
+      expect(res.body.jobs[0].id).not.toBe(failed.id);
+
+      // Nothing left to retry afterwards for the *failed* rows still
+      // present… the forced run is queued (may still be in flight), but
+      // the only failed row is the seed, which was already retried into
+      // a new in-flight row. A second call finds no *new* failures only
+      // if the retry already finished — so just assert the shape here.
+      expect(res.body.duplicates).toEqual([]);
+    });
+
+    it('returns zero when a folder has no failed games', async () => {
+      const folder = (
+        await request(app.getHttpServer())
+          .post('/folders')
+          .send({ name: 'Clean folder' })
+          .expect(201)
+      ).body;
+      const res = await request(app.getHttpServer())
+        .post('/game-imports/retry-failed')
+        .send({ folderId: folder.id })
+        .expect(200);
+      expect(res.body).toEqual({
+        retried: 0,
+        created: 0,
+        reused: 0,
+        jobs: [],
+        duplicates: [],
+      });
+    });
+
+    it('reports per-folder disk usage with ?storage=true', async () => {
+      const folder = (
+        await request(app.getHttpServer())
+          .post('/folders')
+          .send({ name: 'Sized' })
+          .expect(201)
+      ).body;
+      const created = await request(app.getHttpServer())
+        .post('/game-imports')
+        .send({ sourceUrl: gameUrl(10), folderId: folder.id })
+        .expect(201);
+      const done = await waitFor(created.body.id, ['completed', 'failed']);
+      expect(done.status).toBe('completed');
+
+      const res = await request(app.getHttpServer())
+        .get('/folders?storage=true')
+        .expect(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      for (const f of res.body) {
+        expect(f.storage).toBeDefined();
+        expect(typeof f.storage.bytes).toBe('number');
+        expect(typeof f.storage.packages).toBe('number');
+      }
+      const sized = res.body.find((f: any) => f.id === folder.id);
+      expect(sized.storage.packages).toBe(1);
+      expect(sized.storage.bytes).toBeGreaterThan(0);
+
+      // Plain listing stays light (no storage key at all).
+      const plain = await request(app.getHttpServer())
+        .get('/folders')
+        .expect(200);
+      expect(plain.body.every((f: any) => f.storage === undefined)).toBe(true);
+    });
+
+    it('exports the whole library as a downloadable JSON backup', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/folders/export')
+        .expect(200);
+      expect(res.headers['content-disposition']).toMatch(
+        /game-folders-backup-/,
+      );
+      expect(res.body.exportedAt).toBeTruthy();
+      expect(Array.isArray(res.body.folders)).toBe(true);
+      const sized = res.body.folders.find((f: any) => f.name === 'Sized');
+      expect(sized).toBeDefined();
+      expect(sized.games.some((g: any) => g.sourceUrl === gameUrl(10))).toBe(
+        true,
+      );
     });
   });
 });

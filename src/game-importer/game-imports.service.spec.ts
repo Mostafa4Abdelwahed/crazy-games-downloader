@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { Like } from 'typeorm';
 import { GameImportsService, normalizeSourceKey } from './game-imports.service';
 import { SourceAccessRestrictedError } from './sources/source.interface';
 
@@ -507,6 +508,22 @@ describe('GameImportsService list pagination', () => {
       .filter((s) => typeof s === 'number');
     expect(savedSeqs).toEqual([1, 2]);
   });
+
+  it('searches jobs by URL substring combined with other filters', async () => {
+    const { service, repo } = makeService();
+    await service.list(1, 10, null, null, 'updatedAt', 'DESC', 'space');
+    const calls = repo.findAndCount.mock.calls as unknown[][];
+    const call = calls[0][0] as { where?: { sourceUrl?: unknown } };
+    // Same LIKE substring the API would build; works next to folder/status.
+    expect(call.where?.sourceUrl).toEqual(Like('%space%'));
+    // Blank queries are ignored (no where clause at all).
+    await service.list(1, 10);
+    expect(repo.findAndCount).toHaveBeenLastCalledWith({
+      order: { updatedAt: 'DESC' },
+      skip: 0,
+      take: 10,
+    });
+  });
 });
 
 describe('GameImportsService run/stop local server', () => {
@@ -737,5 +754,51 @@ describe('GameImportsService remove (per-job delete)', () => {
     await expect(service.remove('nope')).rejects.toThrow(
       'Import job not found',
     );
+  });
+});
+
+describe('GameImportsService retryFailed', () => {
+  function failedRows() {
+    return [
+      toEntity({
+        id: 'f-a',
+        status: 'failed',
+        sourceUrl: 'https://www.crazygames.com/game/aa',
+        folderId: 'f-1',
+      }),
+      toEntity({
+        id: 'f-b',
+        status: 'failed',
+        sourceUrl: 'https://www.crazygames.com/game/bb',
+        folderId: 'f-1',
+      }),
+    ];
+  }
+
+  it('re-runs every failed job in scope as forced fresh runs', async () => {
+    const { service, queue, repo } = makeService({
+      find: jest.fn(async () => failedRows()),
+    });
+    const res = await service.retryFailed('f-1');
+    expect(res.retried).toBe(2);
+    expect(res.created).toBe(2);
+    expect(res.jobs).toHaveLength(2);
+    expect(queue.enqueue.mock.calls).toHaveLength(2);
+    // The forced runs keep the folder scope.
+    const saved = repo.save.mock.calls.map(
+      (c) => c[0] as { folderId?: string | null },
+    );
+    expect(saved.every((e) => e.folderId === 'f-1')).toBe(true);
+  });
+
+  it('returns zero when nothing failed', async () => {
+    const { service } = makeService();
+    await expect(service.retryFailed('f-1')).resolves.toEqual({
+      retried: 0,
+      created: 0,
+      reused: 0,
+      jobs: [],
+      duplicates: [],
+    });
   });
 });

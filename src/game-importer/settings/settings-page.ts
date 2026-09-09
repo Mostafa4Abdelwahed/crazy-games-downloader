@@ -286,8 +286,8 @@ export function renderSettingsPage(): string {
     '  function render(s) {\n' +
     '    document.getElementById("stats").innerHTML =\n' +
     '      "<div class=\\"stat\\"><b>" + esc(s.stats.jobs) + "</b><small>Jobs</small></div>" +\n' +
-    '      "<div class=\\"stat\\"><b>" + esc(s.stats.packages) + "</b><small>Packages</small></div>" +\n' +
-    '      "<div class=\\"stat\\"><b>" + esc(s.stats.workDirs) + "</b><small>Work dirs</small></div>";\n' +
+    '      "<div class=\\"stat\\"><b>" + esc(s.stats.packages) + "</b><small>Packages · " + fmtBytes(s.stats.packagesBytes || 0) + "</small></div>" +\n' +
+    '      "<div class=\\"stat\\"><b>" + esc(s.stats.workDirs) + "</b><small>Work dirs · " + fmtBytes(s.stats.workBytes || 0) + "</small></div>";\n' +
     '    document.getElementById("kvServer").innerHTML =\n' +
     '      kvRow("Port", esc(s.server.port)) +\n' +
     '      kvRow("Python executable", "<code>" + esc(s.runtime.python) + "</code>");\n' +

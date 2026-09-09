@@ -11,6 +11,7 @@ import {
 import { CreateImportDto } from './dto/create-import.dto';
 import { BatchImportDto } from './dto/batch-import.dto';
 import { DiscoverImportDto } from './dto/discover-import.dto';
+import { FolderScopeDto } from './dto/folder.dto';
 import { GameImportsService } from './game-imports.service';
 
 /**
@@ -32,6 +33,12 @@ export class GameImportsController {
     return this.service.createBatch(dto.sourceUrls, dto.folderId, dto.force);
   }
 
+  @Post('retry-failed')
+  @HttpCode(200)
+  retryFailed(@Body() dto: FolderScopeDto) {
+    return this.service.retryFailed(dto.folderId);
+  }
+
   @Post('discover')
   @HttpCode(200)
   discover(@Body() dto: DiscoverImportDto) {
@@ -46,6 +53,7 @@ export class GameImportsController {
     @Query('status') status?: string,
     @Query('sort') sort?: string,
     @Query('dir') dir?: string,
+    @Query('q') q?: string,
   ) {
     const p = page === undefined ? 1 : Number(page);
     const n = limit === undefined ? 50 : Number(limit);
@@ -65,6 +73,7 @@ export class GameImportsController {
       status || null,
       sortKey,
       dir === 'ASC' || dir === 'asc' ? 'ASC' : 'DESC',
+      q || null,
     );
   }
 

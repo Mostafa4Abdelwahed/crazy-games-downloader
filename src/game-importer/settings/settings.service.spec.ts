@@ -68,7 +68,12 @@ describe('SettingsService', () => {
       expect(v.security.cloudMetadataBlock).toBe(true);
       expect(v.runtime.streamingAssetsRuntimeDiscovery).toBe(true);
       expect(v.runtime.streamingAssetsLocalDiscovery).toBe(true);
-      expect(v.stats).toEqual({ jobs: 2, packages: 1, workDirs: 2 });
+      expect(v.stats.jobs).toBe(2);
+      expect(v.stats.packages).toBe(1);
+      expect(v.stats.workDirs).toBe(2);
+      // Byte counters are present (dirs hold only empty subdirs here).
+      expect(typeof v.stats.packagesBytes).toBe('number');
+      expect(typeof v.stats.workBytes).toBe('number');
     });
 
     it('reflects bullmq + postgres when configured', async () => {

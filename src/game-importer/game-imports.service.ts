@@ -7,7 +7,7 @@ import {
   Inject,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOptionsWhere, In, IsNull, Repository } from 'typeorm';
+import { FindOptionsWhere, In, IsNull, Like, Repository } from 'typeorm';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -634,6 +634,7 @@ export class GameImportsService implements OnModuleInit {
     status?: string | null,
     sort: 'seq' | 'updatedAt' | 'status' | 'progress' = 'updatedAt',
     dir: 'ASC' | 'DESC' = 'DESC',
+    q?: string | null,
   ): Promise<ImportJobPage> {
     const pageSize = Math.min(Math.max(limit, 1), 200);
     const cur = Math.max(page, 1);
@@ -645,6 +646,10 @@ export class GameImportsService implements OnModuleInit {
     }
     if (status && VALID_STATUSES.has(status)) {
       where.status = status as ImportState;
+    }
+    const needle = (q ?? '').trim().slice(0, 200);
+    if (needle) {
+      where.sourceUrl = Like(`%${needle}%`);
     }
     const hasWhere = Object.keys(where).length > 0;
     const orderKey =
@@ -664,6 +669,45 @@ export class GameImportsService implements OnModuleInit {
       pageSize,
       totalPages: Math.max(Math.ceil(total / pageSize), 1),
     };
+  }
+
+  /**
+   * Re-run every FAILED job in one scope as fresh forced runs (same
+   * folder). Old failed rows are kept as history; the new runs are new
+   * rows. `folderId`: a real folder id, `'none'` for ungrouped only,
+   * omitted for everything.
+   */
+  async retryFailed(folderId?: string | null): Promise<{
+    retried: number;
+    created: number;
+    reused: number;
+    jobs: ImportJob[];
+    duplicates: {
+      sourceUrl: string;
+      jobId: string;
+      folderName: string | null;
+    }[];
+  }> {
+    const where: FindOptionsWhere<ImportJobEntity> = { status: 'failed' };
+    let scope: string | null = null;
+    if (folderId !== undefined && folderId !== null && folderId !== 'none') {
+      await this.folders.assertExists(folderId);
+      scope = folderId;
+      where.folderId = folderId;
+    } else if (folderId === 'none') {
+      where.folderId = IsNull() as unknown as string;
+    }
+    const failed = await this.jobs.find({
+      where,
+      select: ['sourceUrl'],
+      order: { updatedAt: 'DESC' },
+    });
+    if (!failed.length) {
+      return { retried: 0, created: 0, reused: 0, jobs: [], duplicates: [] };
+    }
+    const urls = [...new Set(failed.map((j) => j.sourceUrl))];
+    const batch = await this.createBatch(urls, scope, true);
+    return { retried: batch.created + batch.reused, ...batch };
   }
 
   async cancel(id: string): Promise<ImportJob> {

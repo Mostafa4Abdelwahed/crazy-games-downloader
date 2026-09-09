@@ -138,6 +138,7 @@ export function renderHomePage(): string {
     '.chip.run{background:var(--run-bg);color:var(--run-fg);border-color:var(--run-bd)}\n' +
     '.chip.done{background:var(--ok-bg);color:var(--ok-fg);border-color:var(--ok-bd)}\n' +
     '.chip.fail{background:var(--err-bg);color:var(--err-fg);border-color:var(--err-bd)}\n' +
+    '.chip.size{background:var(--surface-raised);color:var(--text-2);border-color:var(--divider)}\n' +
     '.chip svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}\n' +
     '.folder-foot{margin-top:14px;display:flex;align-items:center;justify-content:space-between;gap:10px}\n' +
     '.open-hint{font-size:.8rem;color:var(--brand-soft);font-weight:700}\n' +
@@ -178,6 +179,10 @@ export function renderHomePage(): string {
     '</section>\n' +
     '<section class="card">\n' +
     '<h2 class="section-title">Your folders</h2>\n' +
+    '<div class="row" style="margin-top:0">\n' +
+    '<button type="button" id="exportBtn" class="btn ghost"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export backup (JSON)</button>\n' +
+    '<span id="exportStatus" class="muted"></span>\n' +
+    '</div>\n' +
     '<div id="foldersGrid" class="folders"><p class="muted">Loading…</p></div>\n' +
     '<div id="foldersError" class="err"></div>\n' +
     '</section>\n' +
@@ -217,6 +222,14 @@ export function renderHomePage(): string {
     '    return String(s == null ? "" : s).replace(/[&<>"\']/g, function (c) {\n' +
     '      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\\\"": "&quot;", "\\u0027": "&#39;" }[c];\n' +
     '    });\n' +
+    '  }\n' +
+    '  function fmtBytes(v) {\n' +
+    '    var n = Number(v);\n' +
+    '    if (!isFinite(n) || n < 0) return "0 B";\n' +
+    '    if (n >= 1073741824) return (n / 1073741824).toFixed(1) + " GiB";\n' +
+    '    if (n >= 1048576) return (n / 1048576).toFixed(1) + " MiB";\n' +
+    '    if (n >= 1024) return (n / 1024).toFixed(1) + " KiB";\n' +
+    '    return n + " B";\n' +
     '  }\n' +
     '  function api(path, opts) {\n' +
     '    return fetch(path, opts).then(function (r) {\n' +
@@ -262,6 +275,7 @@ export function renderHomePage(): string {
     '        (f.jobCounts.inFlight ? "<span class=\\"chip run\\">" + f.jobCounts.inFlight + " running</span>" : "") +\n' +
     '        "<span class=\\"chip done\\">" + esc(f.jobCounts.completed) + " done</span>" +\n' +
     '        (f.jobCounts.failed ? "<span class=\\"chip fail\\">" + esc(f.jobCounts.failed) + " failed</span>" : "") +\n' +
+    '        (f.storage && f.storage.packages ? "<span class=\\"chip size\\">" + fmtBytes(f.storage.bytes) + "</span>" : "") +\n' +
     '        "</div>" +\n' +
     '        "<div class=\\"folder-foot\\">" +\n' +
     '        "<span class=\\"open-hint\\">Open console →</span>" +\n' +
@@ -304,7 +318,7 @@ export function renderHomePage(): string {
     '  }\n' +
     '  function load() {\n' +
     '    document.getElementById("foldersError").textContent = "";\n' +
-    '    api("/folders").then(renderFolders, function (e) {\n' +
+    '    api("/folders?storage=true").then(renderFolders, function (e) {\n' +
     '      document.getElementById("foldersGrid").innerHTML = "<p class=\\"err\\">" + esc(e.message) + "</p>";\n' +
     '    });\n' +
     '  }\n' +
@@ -371,6 +385,29 @@ export function renderHomePage(): string {
     '  document.getElementById("newFolderBtn").addEventListener("click", createFolder);\n' +
     '  document.getElementById("newFolderName").addEventListener("keydown", function (ev) {\n' +
     '    if (ev.key === "Enter") createFolder();\n' +
+    '  });\n' +
+    '  document.getElementById("exportBtn").addEventListener("click", function () {\n' +
+    '    var btn = document.getElementById("exportBtn");\n' +
+    '    var status = document.getElementById("exportStatus");\n' +
+    '    btn.disabled = true;\n' +
+    '    status.textContent = "Preparing…";\n' +
+    '    api("/folders/export").then(function (backup) {\n' +
+    '      btn.disabled = false;\n' +
+    '      var blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });\n' +
+    '      var a = document.createElement("a");\n' +
+    '      a.href = URL.createObjectURL(blob);\n' +
+    '      a.download = "game-folders-backup-" + String(backup.exportedAt || "").slice(0, 10) + ".json";\n' +
+    '      document.body.appendChild(a);\n' +
+    '      a.click();\n' +
+    '      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);\n' +
+    '      var n = 0;\n' +
+    '      (backup.folders || []).forEach(function (f) { n += (f.games || []).length; });\n' +
+    '      status.textContent = "Exported " + n + " game(s) in " + (backup.folders || []).length + " group(s).";\n' +
+    '    }, function (e) {\n' +
+    '      btn.disabled = false;\n' +
+    '      status.textContent = "";\n' +
+    '      document.getElementById("foldersError").textContent = e.message;\n' +
+    '    });\n' +
     '  });\n' +
     '  document.getElementById("renameSaveBtn").addEventListener("click", saveRename);\n' +
     '  document.getElementById("renameCancelBtn").addEventListener("click", function () {\n' +

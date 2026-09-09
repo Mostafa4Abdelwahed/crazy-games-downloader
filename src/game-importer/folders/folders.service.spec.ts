@@ -1,4 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { FoldersService } from './folders.service';
 
 const IN_FLIGHT = [
@@ -189,5 +192,86 @@ describe('FoldersService', () => {
       const counted = IN_FLIGHT.includes(s);
       expect(counted).toBe(!terminal.includes(s));
     }
+  });
+
+  it('list(true) attaches per-folder on-disk usage', async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'fs-'));
+    try {
+      const pkgA = path.join(root, 'job-a');
+      const pkgB = path.join(root, 'job-b');
+      await fs.promises.mkdir(pkgA, { recursive: true });
+      await fs.promises.mkdir(pkgB, { recursive: true });
+      await fs.promises.writeFile(path.join(pkgA, 'x.bin'), Buffer.alloc(64));
+      await fs.promises.writeFile(path.join(pkgB, 'y.bin'), Buffer.alloc(32));
+      const rows = makeRepos(
+        [{ id: 'f1', name: 'A', createdAt: new Date() }],
+        [
+          {
+            id: 'job-a',
+            folderId: 'f1',
+            status: 'completed',
+            packageUrl: pkgA,
+          },
+          {
+            id: 'job-b',
+            folderId: 'f1',
+            status: 'completed',
+            packageUrl: pkgB,
+          },
+          { id: 'job-c', folderId: 'f1', status: 'failed', packageUrl: null },
+        ],
+      );
+      const { service } = makeService(rows);
+      const [plain] = await service.list(false);
+      expect(plain.storage).toBeUndefined();
+      const [sized] = await service.list(true);
+      expect(sized.storage).toEqual({ bytes: 96, packages: 2 });
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('exportBackup groups games per folder plus ungrouped', async () => {
+    const at = new Date('2026-01-01T00:00:00.000Z');
+    const rows = makeRepos(
+      [
+        { id: 'f1', name: 'A', createdAt: at },
+        { id: 'f2', name: 'B', createdAt: at },
+      ],
+      [
+        {
+          id: 'j1',
+          seq: 1,
+          folderId: 'f1',
+          sourceUrl: 'https://a.example/1',
+          status: 'completed',
+          createdAt: at,
+        },
+        {
+          id: 'j2',
+          seq: 2,
+          folderId: null,
+          sourceUrl: 'https://a.example/2',
+          status: 'failed',
+          createdAt: at,
+        },
+      ],
+    );
+    const { service } = makeService(rows);
+    const backup = await service.exportBackup();
+    expect(backup.exportedAt).toBeTruthy();
+    expect(backup.folders.map((f) => f.name)).toEqual(['A', 'B', 'Ungrouped']);
+    const a = backup.folders[0];
+    expect(a.games).toEqual([
+      {
+        seq: 1,
+        sourceUrl: 'https://a.example/1',
+        status: 'completed',
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+    ]);
+    // Empty folders keep their slot; ungrouped games are included.
+    expect(backup.folders[1].games).toEqual([]);
+    expect(backup.folders[2].games).toHaveLength(1);
   });
 });

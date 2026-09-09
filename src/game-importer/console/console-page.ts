@@ -210,6 +210,10 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '.filters{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 14px}\n' +
     '.filter-sel{width:auto;min-width:150px;padding:9px 12px;font-size:.85rem}\n' +
     '.filters .btn{padding:9px 18px;font-size:.85rem}\n' +
+    '.search-wrap{position:relative;flex:1;min-width:180px;display:flex;align-items:center}\n' +
+    '.search-wrap svg{position:absolute;left:12px;width:16px;height:16px;stroke:var(--text-3);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}\n' +
+    '.search-wrap .field{padding-left:36px;font-size:.85rem}\n' +
+    '.search-wrap .field::-webkit-search-cancel-button{cursor:pointer}\n' +
     '.workbench .card{margin:0}\n' +
     '.workbench-right{position:sticky;top:86px;max-height:calc(100vh - 106px);display:flex;flex-direction:column;overflow:hidden}\n' +
     '.workbench-right #detail{overflow-y:auto;min-height:200px}\n' +
@@ -282,6 +286,8 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '<option value="progress">Progress</option>\n' +
     '</select>\n' +
     '<button id="sortDir" class="btn ghost" type="button" title="Toggle sort direction" aria-label="Toggle sort direction"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>Desc</button>\n' +
+    '<span class="search-wrap"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input id="searchQ" class="field" type="search" placeholder="Search by game URL…" title="Filter jobs by source URL" autocomplete="off" spellcheck="false"></span>\n' +
+    '<button id="retryFailedBtn" class="btn ghost" type="button" title="Re-run every failed game in this folder as a fresh forced run"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>Retry failed</button>\n' +
     '</div>\n' +
     '<div class="table-wrap">\n' +
     '<table><thead><tr><th>#</th><th>Source</th><th>Status</th><th>Progress</th><th>Updated</th></tr></thead>\n' +
@@ -337,6 +343,8 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '  var jobStatusFilter = "";\n' +
     '  var jobSortKey = "updatedAt";\n' +
     '  var jobSortDir = "DESC";\n' +
+    '  var jobSearchQ = "";\n' +
+    '  var searchTimer = null;\n' +
     '  var IN_FLIGHT = ["queued", "detecting", "resolving", "downloading", "extracting", "validating", "uploading"];\n' +
     '  var COPY_ICON = "<svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><rect x=\\"9\\" y=\\"9\\" width=\\"13\\" height=\\"13\\" rx=\\"2\\"/><path d=\\"M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1\\"/></svg>";\n' +
     '  var CHECK_ICON = "<svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><path d=\\"M20 6L9 17l-5-5\\"/></svg>";\n' +
@@ -376,6 +384,7 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '    var q = "?page=" + jobPage + "&limit=" + jobPageSize + "&folderId=" + encodeURIComponent(FOLDER_ID) +\n' +
     '      "&sort=" + encodeURIComponent(jobSortKey) + "&dir=" + jobSortDir;\n' +
     '    if (jobStatusFilter) q += "&status=" + encodeURIComponent(jobStatusFilter);\n' +
+    '    if (jobSearchQ) q += "&q=" + encodeURIComponent(jobSearchQ);\n' +
     '    return q;\n' +
     '  }\n' +
     '  function loadJobs() {\n' +
@@ -781,6 +790,38 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '    sDir.lastChild.nodeValue = jobSortDir === "ASC" ? "Asc" : "Desc";\n' +
     '    jobPage = 1;\n' +
     '    loadJobs();\n' +
+    '  });\n' +
+    '  var sQ = document.getElementById("searchQ");\n' +
+    '  if (sQ) sQ.addEventListener("input", function () {\n' +
+    '    if (searchTimer) clearTimeout(searchTimer);\n' +
+    '    var v = sQ.value.trim();\n' +
+    '    searchTimer = setTimeout(function () {\n' +
+    '      jobSearchQ = v;\n' +
+    '      jobPage = 1;\n' +
+    '      loadJobs();\n' +
+    '    }, 300);\n' +
+    '  });\n' +
+    '  var rfBtn = document.getElementById("retryFailedBtn");\n' +
+    '  if (rfBtn) rfBtn.addEventListener("click", function () {\n' +
+    '    rfBtn.disabled = true;\n' +
+    '    api("/game-imports/retry-failed", {\n' +
+    '      method: "POST",\n' +
+    '      headers: { "Content-Type": "application/json" },\n' +
+    '      body: JSON.stringify({ folderId: FOLDER_ID })\n' +
+    '    }).then(function (r) {\n' +
+    '      rfBtn.disabled = false;\n' +
+    '      var msg = document.getElementById("formStatus");\n' +
+    '      if (msg) {\n' +
+    '        msg.textContent = r.retried\n' +
+    '          ? ("Retried " + r.retried + " failed game" + (r.retried === 1 ? "" : "s") + ".")\n' +
+    '          : "No failed games to retry in this folder.";\n' +
+    '      }\n' +
+    '      jobPage = 1;\n' +
+    '      loadJobs();\n' +
+    '    }, function (e) {\n' +
+    '      rfBtn.disabled = false;\n' +
+    '      alert(e.message);\n' +
+    '    });\n' +
     '  });\n' +
     '  function initFolderTitle() {\n' +
     '    var el = document.getElementById("consoleTitle");\n' +
