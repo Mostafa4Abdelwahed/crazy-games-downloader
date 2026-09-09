@@ -503,5 +503,48 @@ describe('Game imports integration', () => {
       // Legacy /console redirects to the ungrouped console.
       await request(app.getHttpServer()).get('/console').expect(302);
     });
+
+    it('numbers jobs sequentially and supports status filter + sorting', async () => {
+      // Create two jobs; they get consecutive seq numbers.
+      const a = await request(app.getHttpServer())
+        .post('/game-imports')
+        .send({ sourceUrl: base })
+        .expect(201);
+      const b = await request(app.getHttpServer())
+        .post('/game-imports')
+        .send({ sourceUrl: base })
+        .expect(201);
+      await waitFor(a.body.id, ['completed', 'failed']);
+      await waitFor(b.body.id, ['completed', 'failed']);
+
+      const got = await request(app.getHttpServer())
+        .get(`/game-imports/${a.body.id}`)
+        .expect(200);
+      expect(Number.isInteger(got.body.seq)).toBe(true);
+
+      // Seq ASC ordering: seqs on the page come back ascending.
+      const asc = await request(app.getHttpServer())
+        .get('/game-imports?sort=seq&dir=ASC&limit=200')
+        .expect(200);
+      const seqs = asc.body.items
+        .map((j: any) => j.seq)
+        .filter((n: any) => Number.isInteger(n));
+      expect(seqs.length).toBeGreaterThan(1);
+      expect(seqs).toEqual([...seqs].sort((x: any, y: any) => x - y));
+
+      // Status filter returns only matching rows.
+      const completed = await request(app.getHttpServer())
+        .get('/game-imports?status=completed&limit=200')
+        .expect(200);
+      expect(completed.body.items.length).toBeGreaterThan(0);
+      expect(
+        completed.body.items.every((j: any) => j.status === 'completed'),
+      ).toBe(true);
+
+      // Invalid status values are ignored, not 500s.
+      await request(app.getHttpServer())
+        .get('/game-imports?status=bogus')
+        .expect(200);
+    });
   });
 });

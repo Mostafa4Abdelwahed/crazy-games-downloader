@@ -8,6 +8,7 @@ import { SourceAccessRestrictedError } from './sources/source.interface';
 function toEntity(overrides: Record<string, unknown> = {}) {
   return {
     id: 'job-1',
+    seq: 1,
     sourceUrl: 'https://www.crazygames.com/game/foo',
     sourceKey: normalizeSourceKey('https://www.crazygames.com/game/foo'),
     status: 'queued',
@@ -30,14 +31,23 @@ function toEntity(overrides: Record<string, unknown> = {}) {
 }
 
 function makeService(repoOverrides: Record<string, jest.Mock> = {}) {
+  let seqMax = 0; // shared MAX(seq) the createQueryBuilder mock reports
   const repo = {
     create: jest.fn((e) => e),
-    save: jest.fn(async (e) => e),
-    findOneOrFail: jest.fn(async ({ where }) => {
-      return { ...toEntity(), id: where.id };
+    save: jest.fn(async (e) => {
+      if (e?.seq && e.seq > seqMax) seqMax = e.seq;
+      return e;
     }),
+    findOneOrFail: jest.fn(async ({ where }) => ({
+      ...toEntity(),
+      id: where.id,
+    })),
     find: jest.fn(async () => [] as unknown[]),
     findAndCount: jest.fn(async () => [[], 0] as unknown[]),
+    createQueryBuilder: jest.fn(() => ({
+      select: jest.fn().mockReturnThis(),
+      getRawOne: jest.fn(async () => ({ max: String(seqMax) })),
+    })),
     ...repoOverrides,
   };
   const policy = { assertAllowed: jest.fn() };
@@ -355,6 +365,7 @@ describe('GameImportsService list pagination', () => {
   it('returns lightweight table rows, not heavy job payloads', async () => {
     const full = toEntity({
       id: 'heavy',
+      seq: 7,
       logs: [{ at: 'x', level: 'info', message: 'm' }],
       diagnostics: [{ level: 'error' as const, code: 'X', message: 'boom' }],
       packageUrl: '/srv/out/heavy',
@@ -369,6 +380,7 @@ describe('GameImportsService list pagination', () => {
     expect(res.items).toHaveLength(1);
     expect(res.items[0]).toEqual({
       id: 'heavy',
+      seq: 7,
       sourceUrl: 'https://www.crazygames.com/game/foo',
       status: 'queued',
       progress: 0,
@@ -379,6 +391,64 @@ describe('GameImportsService list pagination', () => {
     expect(res.items[0]).not.toHaveProperty('diagnostics');
     expect(res.items[0]).not.toHaveProperty('packageUrl');
     expect(res.items[0]).not.toHaveProperty('error');
+  });
+
+  it('filters by status and only accepts valid states', async () => {
+    const { service, repo } = makeService();
+    await service.list(1, 10, null, 'downloading');
+    expect(repo.findAndCount).toHaveBeenCalledWith({
+      where: { status: 'downloading' },
+      order: { updatedAt: 'DESC' },
+      skip: 0,
+      take: 10,
+    });
+    // Invalid statuses are ignored rather than 500-ing.
+    await service.list(1, 10, null, 'nonsense');
+    expect(repo.findAndCount).toHaveBeenLastCalledWith({
+      order: { updatedAt: 'DESC' },
+      skip: 0,
+      take: 10,
+    });
+  });
+
+  it('sorts by seq/status/progress in both directions', async () => {
+    const { service, repo } = makeService();
+    await service.list(1, 10, null, null, 'seq', 'ASC');
+    expect(repo.findAndCount).toHaveBeenCalledWith({
+      order: { seq: 'ASC' },
+      skip: 0,
+      take: 10,
+    });
+    await service.list(1, 10, null, null, 'status', 'ASC');
+    expect(repo.findAndCount).toHaveBeenLastCalledWith({
+      order: { status: 'ASC' },
+      skip: 0,
+      take: 10,
+    });
+    await service.list(1, 10, null, null, 'progress', 'DESC');
+    expect(repo.findAndCount).toHaveBeenLastCalledWith({
+      order: { progress: 'DESC' },
+      skip: 0,
+      take: 10,
+    });
+    // Unknown sort keys fall back to updatedAt.
+    await service.list(1, 10, null, null, 'bogus' as 'seq', 'DESC');
+    expect(repo.findAndCount).toHaveBeenLastCalledWith({
+      order: { updatedAt: 'DESC' },
+      skip: 0,
+      take: 10,
+    });
+  });
+
+  it('assigns sequential job numbers at creation', async () => {
+    const { service, repo } = makeService();
+    await service.create('https://www.crazygames.com/game/one');
+    await service.create('https://www.crazygames.com/game/two');
+    // The second create's saved entity carries seq = 2 (unique, increasing).
+    const savedSeqs = repo.save.mock.calls
+      .map((c) => (c[0] as { seq?: number }).seq)
+      .filter((s) => typeof s === 'number');
+    expect(savedSeqs).toEqual([1, 2]);
   });
 });
 

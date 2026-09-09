@@ -42,16 +42,28 @@ export class GameImportsController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('folderId') folderId?: string,
+    @Query('status') status?: string,
+    @Query('sort') sort?: string,
+    @Query('dir') dir?: string,
   ) {
     const p = page === undefined ? 1 : Number(page);
     const n = limit === undefined ? 50 : Number(limit);
     // folderId: a real folder id, 'none' (ungrouped only), or omitted (all).
     const scope =
       folderId === undefined || folderId === '' ? undefined : folderId;
+    const sortKey =
+      sort === 'seq' || sort === 'status' || sort === 'progress'
+        ? sort
+        : sort === 'createdAt' || sort === 'updatedAt'
+          ? 'updatedAt'
+          : 'updatedAt';
     return this.service.list(
       Number.isFinite(p) ? p : 1,
       Number.isFinite(n) ? n : 50,
       scope,
+      status || null,
+      sortKey,
+      dir === 'ASC' || dir === 'asc' ? 'ASC' : 'DESC',
     );
   }
 

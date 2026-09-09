@@ -41,6 +41,20 @@ function isTerminal(s: ImportState): boolean {
   return TERMINAL_STATES.has(s);
 }
 
+/** Valid `status` filter values for the jobs listing (console). */
+const VALID_STATUSES = new Set<string>([
+  'queued',
+  'detecting',
+  'resolving',
+  'downloading',
+  'extracting',
+  'validating',
+  'uploading',
+  'completed',
+  'failed',
+  'cancelled',
+]);
+
 /**
  * Normalize a game URL so equivalent submissions deduplicate:
  * lowercase origin, strip default ports, drop fragment and trailing slash.
@@ -87,6 +101,7 @@ export interface DiscoveredGameView {
  */
 export interface ImportJobSummary {
   id: string;
+  seq: number | null;
   sourceUrl: string;
   status: ImportState;
   progress: number;
@@ -233,6 +248,7 @@ export function openBrowser(url: string): ReturnType<typeof spawn> | null {
 function toJob(e: ImportJobEntity): ImportJob {
   return {
     id: e.id,
+    seq: e.seq ?? null,
     sourceUrl: e.sourceUrl,
     status: e.status,
     progress: e.progress,
@@ -259,6 +275,7 @@ function toJob(e: ImportJobEntity): ImportJob {
 function toJobSummary(e: ImportJobEntity): ImportJobSummary {
   return {
     id: e.id,
+    seq: e.seq ?? null,
     sourceUrl: e.sourceUrl,
     status: e.status,
     progress: e.progress,
@@ -288,9 +305,28 @@ export class GameImportsService implements OnModuleInit {
   private readonly running = new Map<string, RunServerEntry>();
 
   /**
+   * Next human-friendly sequential job number (#1, #2, …). Unique enough
+   * for console display; a rare race would just retry on the unique
+   * index, so serialize via a single in-process promise chain.
+   */
+  private seqChain: Promise<number> = Promise.resolve(0);
+  private nextSeq(): Promise<number> {
+    this.seqChain = this.seqChain.then(async (prev) => {
+      const last = await this.jobs
+        .createQueryBuilder('j')
+        .select('MAX(j.seq)', 'max')
+        .getRawOne();
+      const max = Number(last?.max ?? 0);
+      return Math.max(max, prev) + 1;
+    });
+    return this.seqChain;
+  }
+
+  /**
    * Backfill `sourceKey` for rows created before dedup existed (their
-   * column defaulted to `''`), so previously-added games dedup against
-   * re-submissions the same way new ones do.
+   * column defaulted to `''`), and `seq` for rows created before the
+   * human-friendly job numbering existed (NULL) — legacy rows get
+   * numbers in creation order so the console shows #1, #2, … for them.
    */
   async onModuleInit(): Promise<void> {
     try {
@@ -298,14 +334,35 @@ export class GameImportsService implements OnModuleInit {
         where: { sourceKey: '' },
         order: { updatedAt: 'DESC' },
       });
-      if (!missing.length) return;
-      for (const e of missing) e.sourceKey = normalizeSourceKey(e.sourceUrl);
-      await this.jobs.save(missing);
-      this.logger.log(
-        `Backfilled sourceKey for ${missing.length} import row(s)`,
-      );
+      if (missing.length) {
+        for (const e of missing) e.sourceKey = normalizeSourceKey(e.sourceUrl);
+        await this.jobs.save(missing);
+        this.logger.log(
+          `Backfilled sourceKey for ${missing.length} import row(s)`,
+        );
+      }
     } catch (err) {
       this.logger.warn(`sourceKey backfill skipped: ${(err as Error).message}`);
+    }
+    try {
+      const unnumbered = await this.jobs.find({
+        where: { seq: null as unknown as number },
+        order: { createdAt: 'ASC' },
+      });
+      if (!unnumbered.length) return;
+      const last = await this.jobs
+        .createQueryBuilder('j')
+        .select('MAX(j.seq)', 'max')
+        .getRawOne();
+      let next = Number(last?.max ?? 0);
+      for (const e of unnumbered) {
+        next += 1;
+        e.seq = next;
+      }
+      await this.jobs.save(unnumbered);
+      this.logger.log(`Backfilled seq for ${unnumbered.length} import row(s)`);
+    } catch (err) {
+      this.logger.warn(`seq backfill skipped: ${(err as Error).message}`);
     }
   }
 
@@ -359,6 +416,7 @@ export class GameImportsService implements OnModuleInit {
     }
     const entity = this.jobs.create({
       id: randomUUID(),
+      seq: await this.nextSeq(),
       sourceKey: key,
       sourceUrl,
       status: 'queued',
@@ -514,24 +572,36 @@ export class GameImportsService implements OnModuleInit {
    * nothing about queueing or processing. Paginated so large queues stay
    * browsable without pulling everything at once. When `folderId` is given
    * only that folder's jobs are listed; `folderId='none'` lists only
-   * ungrouped jobs; omitted lists everything.
+   * ungrouped jobs; omitted lists everything. `status` filters to one
+   * ImportState; `sort`/`dir` order the page (default: newest first).
    */
   async list(
     page = 1,
     limit = 50,
     folderId?: string | null,
+    status?: string | null,
+    sort: 'seq' | 'updatedAt' | 'status' | 'progress' = 'updatedAt',
+    dir: 'ASC' | 'DESC' = 'DESC',
   ): Promise<ImportJobPage> {
     const pageSize = Math.min(Math.max(limit, 1), 200);
     const cur = Math.max(page, 1);
-    const where: FindOptionsWhere<ImportJobEntity> | undefined =
-      folderId === undefined || folderId === null
-        ? undefined
-        : folderId === 'none'
-          ? { folderId: IsNull() }
-          : { folderId };
+    const where: FindOptionsWhere<ImportJobEntity> = {};
+    if (folderId !== undefined && folderId !== null && folderId !== 'none') {
+      where.folderId = folderId;
+    } else if (folderId === 'none') {
+      where.folderId = IsNull() as unknown as string;
+    }
+    if (status && VALID_STATUSES.has(status)) {
+      where.status = status as ImportState;
+    }
+    const hasWhere = Object.keys(where).length > 0;
+    const orderKey =
+      sort === 'seq' || sort === 'status' || sort === 'progress'
+        ? sort
+        : 'updatedAt';
     const [entities, total] = await this.jobs.findAndCount({
-      ...(where ? { where } : {}),
-      order: { updatedAt: 'DESC' },
+      ...(hasWhere ? { where } : {}),
+      order: { [orderKey]: dir === 'ASC' ? 'ASC' : 'DESC' },
       skip: (cur - 1) * pageSize,
       take: pageSize,
     });

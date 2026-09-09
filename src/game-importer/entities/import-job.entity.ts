@@ -13,6 +13,15 @@ export class ImportJobEntity {
   @PrimaryColumn('uuid')
   id!: string;
 
+  /**
+   * Human-friendly sequential job number (#1, #2, …) assigned at
+   * creation. Purely cosmetic for the console table; the UUID id stays
+   * the real identifier everywhere else.
+   */
+  @Index({ unique: true })
+  @Column('integer', { nullable: true })
+  seq!: number | null;
+
   @Column('text')
   sourceUrl!: string;
 

@@ -165,6 +165,42 @@ describe('management console page', () => {
     expect(html).toContain('var FOLDER_ID = "none"');
   });
 
+  it('shows sequential job numbers instead of raw UUIDs', () => {
+    const html = renderConsolePage();
+    // The table header switched from "ID" to "#"; rows render #seq.
+    expect(html).toContain('<th>#</th>');
+    expect(html).toContain(
+      '"<td><code>#" + (j.seq != null ? esc(j.seq) : "?") + "</code></td>"',
+    );
+  });
+
+  it('filters and sorts the jobs table from the UI', () => {
+    const html = renderConsolePage();
+    // Status filter dropdown with every ImportState.
+    expect(html).toContain('id="filterStatus"');
+    for (const s of [
+      'queued',
+      'downloading',
+      'validating',
+      'completed',
+      'failed',
+      'cancelled',
+    ]) {
+      expect(html).toContain(`<option value="${s}">`);
+    }
+    // Sort dropdown + direction toggle, all wired into the query.
+    expect(html).toContain('id="sortKey"');
+    expect(html).toContain('id="sortDir"');
+    expect(html).toContain(
+      '"&sort=" + encodeURIComponent(jobSortKey) + "&dir=" + jobSortDir',
+    );
+    expect(html).toContain(
+      'if (jobStatusFilter) q += "&status=" + encodeURIComponent(jobStatusFilter)',
+    );
+    // Changing a filter/sort resets back to page 1.
+    expect(html.split('jobPage = 1;').length - 1).toBeGreaterThanOrEqual(3);
+  });
+
   it('polls the job list only while jobs are in flight, never when idle', () => {
     const html = renderConsolePage();
     // The only loadJobs interval anywhere is the one inside startPoll(),

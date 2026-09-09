@@ -203,6 +203,9 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '.pager-size{display:inline-flex;align-items:center;font-size:.82rem;white-space:nowrap}\n' +
     '.pager .btn:disabled{cursor:not-allowed}\n' +
     '.workbench{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(320px,1fr);gap:16px;align-items:start;margin:16px 0}\n' +
+    '.filters{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 14px}\n' +
+    '.filter-sel{width:auto;min-width:150px;padding:9px 12px;font-size:.85rem}\n' +
+    '.filters .btn{padding:9px 18px;font-size:.85rem}\n' +
     '.workbench .card{margin:0}\n' +
     '.workbench-right{position:sticky;top:86px;max-height:calc(100vh - 106px);display:flex;flex-direction:column;overflow:hidden}\n' +
     '.workbench-right #detail{overflow-y:auto;min-height:200px}\n' +
@@ -249,8 +252,34 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '<div class="workbench">\n' +
     '<section class="card workbench-left">\n' +
     '<h2 class="section-title">Jobs</h2>\n' +
+    '<div class="filters">\n' +
+    '<select id="filterStatus" class="field filter-sel" title="Filter by status">\n' +
+    '<option value="">All statuses</option>\n' +
+    '<optgroup label="In flight">\n' +
+    '<option value="queued">Queued</option>\n' +
+    '<option value="detecting">Detecting</option>\n' +
+    '<option value="resolving">Resolving</option>\n' +
+    '<option value="downloading">Downloading</option>\n' +
+    '<option value="extracting">Extracting</option>\n' +
+    '<option value="validating">Validating</option>\n' +
+    '<option value="uploading">Uploading</option>\n' +
+    '</optgroup>\n' +
+    '<optgroup label="Terminal">\n' +
+    '<option value="completed">Completed</option>\n' +
+    '<option value="failed">Failed</option>\n' +
+    '<option value="cancelled">Cancelled</option>\n' +
+    '</optgroup>\n' +
+    '</select>\n' +
+    '<select id="sortKey" class="field filter-sel" title="Sort by">\n' +
+    '<option value="updatedAt" selected>Recently updated</option>\n' +
+    '<option value="seq">Job number</option>\n' +
+    '<option value="status">Status</option>\n' +
+    '<option value="progress">Progress</option>\n' +
+    '</select>\n' +
+    '<button id="sortDir" class="btn ghost" type="button" title="Toggle sort direction" aria-label="Toggle sort direction"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>Desc</button>\n' +
+    '</div>\n' +
     '<div class="table-wrap">\n' +
-    '<table><thead><tr><th>ID</th><th>Source</th><th>Status</th><th>Progress</th><th>Updated</th></tr></thead>\n' +
+    '<table><thead><tr><th>#</th><th>Source</th><th>Status</th><th>Progress</th><th>Updated</th></tr></thead>\n' +
     '<tbody id="jobRows"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody></table>\n' +
     '</div>\n' +
     '<div class="row pager">\n' +
@@ -300,6 +329,9 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '  var jobPageSize = 50;\n' +
     '  var jobTotal = 0;\n' +
     '  var jobTotalPages = 1;\n' +
+    '  var jobStatusFilter = "";\n' +
+    '  var jobSortKey = "updatedAt";\n' +
+    '  var jobSortDir = "DESC";\n' +
     '  var IN_FLIGHT = ["queued", "detecting", "resolving", "downloading", "extracting", "validating", "uploading"];\n' +
     '  var COPY_ICON = "<svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><rect x=\\"9\\" y=\\"9\\" width=\\"13\\" height=\\"13\\" rx=\\"2\\"/><path d=\\"M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1\\"/></svg>";\n' +
     '  var CHECK_ICON = "<svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><path d=\\"M20 6L9 17l-5-5\\"/></svg>";\n' +
@@ -336,7 +368,10 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '  }\n' +
     '  function shortId(id) { return esc(String(id).slice(0, 8)); }\n' +
     '  function jobsQuery() {\n' +
-    '    return "?page=" + jobPage + "&limit=" + jobPageSize + "&folderId=" + encodeURIComponent(FOLDER_ID);\n' +
+    '    var q = "?page=" + jobPage + "&limit=" + jobPageSize + "&folderId=" + encodeURIComponent(FOLDER_ID) +\n' +
+    '      "&sort=" + encodeURIComponent(jobSortKey) + "&dir=" + jobSortDir;\n' +
+    '    if (jobStatusFilter) q += "&status=" + encodeURIComponent(jobStatusFilter);\n' +
+    '    return q;\n' +
     '  }\n' +
     '  function loadJobs() {\n' +
     '    api("/game-imports" + jobsQuery()).then(function (data) {\n' +
@@ -346,11 +381,11 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '      jobTotalPages = data.totalPages || 1;\n' +
     '      if (jobPage > jobTotalPages) { jobPage = Math.max(jobTotalPages, 1); }\n' +
     '      renderJobsPager();\n' +
-    '      if (!jobs.length) { tb.innerHTML = "<tr><td colspan=\\"5\\" class=\\"muted\\">No jobs yet.</td></tr>"; return; }\n' +
+    '      if (!jobs.length) { tb.innerHTML = "<tr><td colspan=\\"5\\" class=\\"muted\\">No jobs match.</td></tr>"; return; }\n' +
     '      var html = "";\n' +
     '      jobs.forEach(function (j) {\n' +
     '        html += "<tr class=\\"job" + (j.id === selectedId ? " sel" : "") + "\\" data-id=\\"" + esc(j.id) + "\\">" +\n' +
-    '          "<td><code>" + shortId(j.id) + "</code></td>" +\n' +
+    '          "<td><code>#" + (j.seq != null ? esc(j.seq) : "?") + "</code></td>" +\n' +
     '          "<td>" + esc(j.sourceUrl) + "</td>" +\n' +
     '          "<td><span class=\\"pill " + esc(j.status) + "\\">" + esc(j.status) + "</span></td>" +\n' +
     '          "<td>" + esc(j.progress) + "%</td>" +\n' +
@@ -678,6 +713,25 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '  if (jNext) jNext.addEventListener("click", function () { gotoJobsPage(jobPage + 1); });\n' +
     '  var jSize = document.getElementById("jobsPageSize");\n' +
     '  if (jSize) jSize.addEventListener("change", function () { jobPageSize = Number(jSize.value) || 50; gotoJobsPage(1); });\n' +
+    '  var fStatus = document.getElementById("filterStatus");\n' +
+    '  if (fStatus) fStatus.addEventListener("change", function () {\n' +
+    '    jobStatusFilter = fStatus.value;\n' +
+    '    jobPage = 1;\n' +
+    '    loadJobs();\n' +
+    '  });\n' +
+    '  var sKey = document.getElementById("sortKey");\n' +
+    '  if (sKey) sKey.addEventListener("change", function () {\n' +
+    '    jobSortKey = sKey.value;\n' +
+    '    jobPage = 1;\n' +
+    '    loadJobs();\n' +
+    '  });\n' +
+    '  var sDir = document.getElementById("sortDir");\n' +
+    '  if (sDir) sDir.addEventListener("click", function () {\n' +
+    '    jobSortDir = jobSortDir === "ASC" ? "DESC" : "ASC";\n' +
+    '    sDir.lastChild.nodeValue = jobSortDir === "ASC" ? "Asc" : "Desc";\n' +
+    '    jobPage = 1;\n' +
+    '    loadJobs();\n' +
+    '  });\n' +
     '  function initFolderTitle() {\n' +
     '    var el = document.getElementById("consoleTitle");\n' +
     '    if (!el) return;\n' +

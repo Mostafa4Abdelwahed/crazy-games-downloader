@@ -162,6 +162,8 @@ export interface UnityBuild {
 
 export interface ImportJob {
   id: string;
+  /** Human-friendly sequential number (#1, #2, …) for the console. */
+  seq?: number | null;
   sourceUrl: string;
   status: ImportState;
   progress: number;
