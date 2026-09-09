@@ -43,6 +43,7 @@ function makeService(repoOverrides: Record<string, jest.Mock> = {}) {
   const policy = { assertAllowed: jest.fn() };
   const queue = { enqueue: jest.fn(async () => undefined) };
   const sources = { findAdapter: jest.fn() };
+  const folders = { assertExists: jest.fn(async () => undefined) };
   const launchServer = jest.fn(async () => ({
     url: 'http://localhost:54321/',
     port: 54321,
@@ -53,10 +54,11 @@ function makeService(repoOverrides: Record<string, jest.Mock> = {}) {
     policy as never,
     queue as never,
     sources as never,
+    folders as never,
     jest.fn(() => null) as never,
     launchServer as never,
   );
-  return { service, repo, policy, queue, sources, launchServer };
+  return { service, repo, policy, queue, sources, folders, launchServer };
 }
 
 describe('GameImportsService dedup + batch', () => {

@@ -23,12 +23,12 @@ export class GameImportsController {
 
   @Post()
   create(@Body() dto: CreateImportDto) {
-    return this.service.create(dto.sourceUrl);
+    return this.service.create(dto.sourceUrl, dto.folderId);
   }
 
   @Post('batch')
   createBatch(@Body() dto: BatchImportDto) {
-    return this.service.createBatch(dto.sourceUrls);
+    return this.service.createBatch(dto.sourceUrls, dto.folderId);
   }
 
   @Post('discover')
@@ -38,12 +38,20 @@ export class GameImportsController {
   }
 
   @Get()
-  list(@Query('page') page?: string, @Query('limit') limit?: string) {
+  list(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('folderId') folderId?: string,
+  ) {
     const p = page === undefined ? 1 : Number(page);
     const n = limit === undefined ? 50 : Number(limit);
+    // folderId: a real folder id, 'none' (ungrouped only), or omitted (all).
+    const scope =
+      folderId === undefined || folderId === '' ? undefined : folderId;
     return this.service.list(
       Number.isFinite(p) ? p : 1,
       Number.isFinite(n) ? n : 50,
+      scope,
     );
   }
 

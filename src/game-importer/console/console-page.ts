@@ -16,7 +16,12 @@
  * executed here (imported games run only in the isolated Playwright sandbox
  * / operator-served packages).
  */
-export function renderConsolePage(): string {
+/**
+ * Renders the import console for ONE folder. `folderId` is the URL path
+ * segment: a real folder id or "none" for the ungrouped collection. The
+ * page resolves the folder name client-side and scopes every jobs call.
+ */
+export function renderConsolePage(folderId: string = 'none'): string {
   return (
     '<!doctype html>\n' +
     '<html lang="en">\n' +
@@ -209,11 +214,11 @@ export function renderConsolePage(): string {
     '<header class="appbar">\n' +
     '<span class="logo"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M17.32 5H6.68a4 4 0 0 0-3.98 3.59c-.007.052-.01.101-.017.152C2.6 9.42 2 14.46 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.41-1.41A2 2 0 0 1 9.83 16h4.34a2 2 0 0 1 1.41.59L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.54-.6-6.58-.68-7.26-.01-.05-.01-.1-.02-.15A4 4 0 0 0 17.32 5z"/><line x1="6" x2="10" y1="11" y2="11"/><line x1="8" x2="8" y1="9" y2="13"/><line x1="15" x2="15.01" y1="12" y2="12"/><line x1="18" x2="18.01" y1="10" y2="10"/></svg></span>\n' +
     '<div>\n' +
-    '<h1>Game Import Console</h1>\n' +
+    '<h1 id="consoleTitle">Game Import Console</h1>\n' +
     '<p>Import authorized HTML5/Unity games, watch progress, inspect diagnostics, and get local run instructions.</p>\n' +
     '</div>\n' +
     '<nav class="nav-tabs">\n' +
-    '<a href="/console" class="active"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg><span>Console</span></a>\n' +
+    '<a href="/" id="homeTab"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg><span>Folders</span></a>\n' +
     '<a href="/console/settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span>Settings</span></a>\n' +
     '</nav>\n' +
     '<button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle color theme" title="Toggle light/dark">\n' +
@@ -285,6 +290,9 @@ export function renderConsolePage(): string {
     '<script>\n' +
     '(function () {\n' +
     '  "use strict";\n' +
+    '  var FOLDER_ID = ' +
+    JSON.stringify(folderId) +
+    ';\n' +
     '  var selectedId = null;\n' +
     '  var activeTimer = null;\n' +
     '  var pollTimer = null;\n' +
@@ -327,8 +335,11 @@ export function renderConsolePage(): string {
     '    });\n' +
     '  }\n' +
     '  function shortId(id) { return esc(String(id).slice(0, 8)); }\n' +
+    '  function jobsQuery() {\n' +
+    '    return "?page=" + jobPage + "&limit=" + jobPageSize + "&folderId=" + encodeURIComponent(FOLDER_ID);\n' +
+    '  }\n' +
     '  function loadJobs() {\n' +
-    '    api("/game-imports?page=" + jobPage + "&limit=" + jobPageSize).then(function (data) {\n' +
+    '    api("/game-imports" + jobsQuery()).then(function (data) {\n' +
     '      var tb = document.getElementById("jobRows");\n' +
     '      var jobs = data.items || [];\n' +
     '      jobTotal = data.total;\n' +
@@ -550,7 +561,7 @@ export function renderConsolePage(): string {
     '    api("/game-imports/batch", {\n' +
     '      method: "POST",\n' +
     '      headers: { "Content-Type": "application/json" },\n' +
-    '      body: JSON.stringify({ sourceUrls: urls })\n' +
+    '      body: JSON.stringify({ sourceUrls: urls, folderId: FOLDER_ID })\n' +
     '    }).then(function (r) {\n' +
     '      btn.disabled = false;\n' +
     '      document.getElementById("sourceUrls").value = "";\n' +
@@ -629,7 +640,7 @@ export function renderConsolePage(): string {
     '      api("/game-imports/batch", {\n' +
     '        method: "POST",\n' +
     '        headers: { "Content-Type": "application/json" },\n' +
-    '        body: JSON.stringify({ sourceUrls: chunk })\n' +
+    '        body: JSON.stringify({ sourceUrls: chunk, folderId: FOLDER_ID })\n' +
     '      }).then(function (r) {\n' +
     '        totals.created += r.created;\n' +
     '        totals.reused += r.reused;\n' +
@@ -667,6 +678,18 @@ export function renderConsolePage(): string {
     '  if (jNext) jNext.addEventListener("click", function () { gotoJobsPage(jobPage + 1); });\n' +
     '  var jSize = document.getElementById("jobsPageSize");\n' +
     '  if (jSize) jSize.addEventListener("change", function () { jobPageSize = Number(jSize.value) || 50; gotoJobsPage(1); });\n' +
+    '  function initFolderTitle() {\n' +
+    '    var el = document.getElementById("consoleTitle");\n' +
+    '    if (!el) return;\n' +
+    '    if (FOLDER_ID === "none") { el.textContent = "Ungrouped games"; return; }\n' +
+    '    api("/folders/" + encodeURIComponent(FOLDER_ID)).then(function (f) {\n' +
+    '      el.textContent = f.name;\n' +
+    '      document.title = f.name + " — Game Import Console";\n' +
+    '    }, function () {\n' +
+    '      el.textContent = "Game Import Console";\n' +
+    '    });\n' +
+    '  }\n' +
+    '  initFolderTitle();\n' +
     '  initTheme();\n' +
     '  loadJobs();\n' +
     '  renderJobsPager();\n' +

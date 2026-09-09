@@ -70,6 +70,15 @@ export class ImportJobEntity {
   @Column('text', { nullable: true })
   packageUrl!: string | null;
 
+  /**
+   * Owning folder (organizational grouping for the console). Null means
+   * the job lives in the default/ungrouped collection (shown on a
+   * fallback console, not on any folder page).
+   */
+  @Index()
+  @Column('uuid', { nullable: true })
+  folderId!: string | null;
+
   @Column('simple-json', { nullable: true })
   logs!: { at: string; level: string; message: string; step?: string }[] | null;
 

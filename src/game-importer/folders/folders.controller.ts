@@ -1,0 +1,64 @@
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  Patch,
+  Post,
+} from '@nestjs/common';
+import {
+  AssignJobDto,
+  CreateFolderDto,
+  RenameFolderDto,
+} from '../dto/folder.dto';
+import { FoldersService } from './folders.service';
+
+/**
+ * Folders API for the home page: named groups of games, each with its
+ * own console. Deletion never deletes jobs or packages — jobs fall
+ * back to the ungrouped collection.
+ */
+@Controller('folders')
+export class FoldersController {
+  constructor(private readonly folders: FoldersService) {}
+
+  @Get()
+  list() {
+    return this.folders.list();
+  }
+
+  @Get(':id')
+  get(@Param('id') id: string) {
+    return this.folders.get(id);
+  }
+
+  @Post()
+  create(@Body() dto: CreateFolderDto) {
+    return this.folders.create(dto.name);
+  }
+
+  @Patch(':id')
+  rename(@Param('id') id: string, @Body() dto: RenameFolderDto) {
+    return this.folders.rename(id, dto.name);
+  }
+
+  @Delete(':id')
+  @HttpCode(200)
+  async delete(@Param('id') id: string) {
+    return this.folders.delete(id);
+  }
+
+  @Post(':id/assign')
+  @HttpCode(200)
+  assign(@Param('id') id: string, @Body() dto: AssignJobDto) {
+    return this.folders.assignJob(dto.jobId, id);
+  }
+
+  @Post('unassign')
+  @HttpCode(200)
+  unassign(@Body() dto: AssignJobDto) {
+    return this.folders.assignJob(dto.jobId, null);
+  }
+}

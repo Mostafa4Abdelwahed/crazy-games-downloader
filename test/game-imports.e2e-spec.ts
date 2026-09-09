@@ -9,6 +9,7 @@ import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { GameImporterModule } from '../src/game-importer/game-importer.module';
 import { ImportJobEntity } from '../src/game-importer/entities/import-job.entity';
+import { GameFolderEntity } from '../src/game-importer/entities/game-folder.entity';
 import { SecureDownloader } from '../src/game-importer/core/downloader';
 import { ImportWorker } from '../src/game-importer/queue/import.worker';
 import {
@@ -82,7 +83,7 @@ describe('Game imports integration', () => {
         TypeOrmModule.forRoot({
           type: 'sqlite',
           database: ':memory:',
-          entities: [ImportJobEntity],
+          entities: [ImportJobEntity, GameFolderEntity],
           synchronize: true,
         }),
         GameImporterModule,
@@ -366,6 +367,141 @@ describe('Game imports integration', () => {
         .expect(200);
       expect(work.body.cleared).toBeGreaterThanOrEqual(1);
       expect(fs.readdirSync(workDir)).toEqual([]);
+    });
+  });
+
+  describe('folders', () => {
+    it('creates, lists, renames and deletes folders via REST', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/folders')
+        .send({ name: 'Action picks' })
+        .expect(201);
+      expect(created.body.name).toBe('Action picks');
+      expect(created.body.jobCounts.total).toBe(0);
+      expect(created.body.packagesRoot).toBe(path.resolve(storeDir));
+
+      // Duplicate names are rejected.
+      await request(app.getHttpServer())
+        .post('/folders')
+        .send({ name: 'Action picks' })
+        .expect(400);
+
+      const renamed = await request(app.getHttpServer())
+        .patch(`/folders/${created.body.id}`)
+        .send({ name: 'Favorites' })
+        .expect(200);
+      expect(renamed.body.name).toBe('Favorites');
+
+      const list = await request(app.getHttpServer())
+        .get('/folders')
+        .expect(200);
+      expect(Array.isArray(list.body)).toBe(true);
+      expect(list.body.some((f: any) => f.name === 'Favorites')).toBe(true);
+
+      const del = await request(app.getHttpServer())
+        .delete(`/folders/${created.body.id}`)
+        .expect(200);
+      expect(del.body).toEqual({ deleted: true, unassigned: 0 });
+    });
+
+    it('scopes jobs: creations carry the folder, lists filter by it', async () => {
+      const before = (
+        await request(app.getHttpServer())
+          .get('/game-imports?folderId=none')
+          .expect(200)
+      ).body.total;
+
+      const folder = (
+        await request(app.getHttpServer())
+          .post('/folders')
+          .send({ name: 'Scoped' })
+          .expect(201)
+      ).body;
+
+      // Two jobs in the folder, one ungrouped.
+      const a = await request(app.getHttpServer())
+        .post('/game-imports')
+        .send({ sourceUrl: base, folderId: folder.id })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post('/game-imports/batch')
+        .send({ sourceUrls: [base], folderId: folder.id })
+        .expect(201);
+      const ungroupedJob = await request(app.getHttpServer())
+        .post('/game-imports')
+        .send({ sourceUrl: base })
+        .expect(201);
+      await waitFor(a.body.id, ['completed', 'failed']);
+
+      // The folder view counts only its own jobs.
+      const view = await request(app.getHttpServer())
+        .get(`/folders/${folder.id}`)
+        .expect(200);
+      expect(view.body.jobCounts.total).toBe(2);
+
+      // Scoped listing returns only folder jobs.
+      const scoped = await request(app.getHttpServer())
+        .get(`/game-imports?folderId=${folder.id}`)
+        .expect(200);
+      expect(scoped.body.total).toBe(2);
+
+      // "none" returns only ungrouped jobs (exactly one new one).
+      const ungrouped = await request(app.getHttpServer())
+        .get('/game-imports?folderId=none')
+        .expect(200);
+      expect(ungrouped.body.total).toBe(before + 1);
+      expect(
+        ungrouped.body.items.some((j: any) => j.id === ungroupedJob.body.id),
+      ).toBe(true);
+      expect(ungrouped.body.items.some((j: any) => j.id === a.body.id)).toBe(
+        false,
+      );
+
+      // Unlisted scope returns everything (folder + ungrouped).
+      const all = await request(app.getHttpServer())
+        .get('/game-imports')
+        .expect(200);
+      expect(all.body.total).toBeGreaterThanOrEqual(3);
+
+      // Unknown folder ids are rejected at creation.
+      await request(app.getHttpServer())
+        .post('/game-imports')
+        .send({ sourceUrl: base, folderId: randomUUID() })
+        .expect(400);
+
+      // Deleting the folder unassigns its jobs without deleting them.
+      await request(app.getHttpServer())
+        .delete(`/folders/${folder.id}`)
+        .expect(200);
+      const after = await request(app.getHttpServer())
+        .get('/game-imports?folderId=none')
+        .expect(200);
+      expect(after.body.total).toBe(before + 3);
+    });
+
+    it('serves the home page and folder-scoped console pages', async () => {
+      const home = await request(app.getHttpServer()).get('/').expect(200);
+      expect(home.text).toContain('<!doctype html>');
+      expect(home.text).toContain('id="foldersGrid"');
+
+      const ungrouped = await request(app.getHttpServer())
+        .get('/console/none')
+        .expect(200);
+      expect(ungrouped.text).toContain('var FOLDER_ID = "none"');
+
+      const folder = (
+        await request(app.getHttpServer())
+          .post('/folders')
+          .send({ name: 'UI folder' })
+          .expect(201)
+      ).body;
+      const page = await request(app.getHttpServer())
+        .get(`/console/${folder.id}`)
+        .expect(200);
+      expect(page.text).toContain(`var FOLDER_ID = "${folder.id}"`);
+
+      // Legacy /console redirects to the ungrouped console.
+      await request(app.getHttpServer()).get('/console').expect(302);
     });
   });
 });

@@ -96,8 +96,10 @@ describe('management console page', () => {
     expect(html).toContain('id="jobsNextBtn"');
     expect(html).toContain('id="jobsPageInfo"');
     expect(html).toContain('id="jobsPageSize"');
-    // Reads the paginated { items, total, totalPages } response.
-    expect(html).toContain('/game-imports?page=');
+    // Reads the paginated { items, total, totalPages } response,
+    // scoped to the console's folder.
+    expect(html).toContain('jobsQuery()');
+    expect(html).toContain('"&folderId=" + encodeURIComponent(FOLDER_ID)');
     expect(html).toContain('data.items');
     expect(html).toContain('data.totalPages');
     // Prev disabled on page 1, Next disabled past the last page.
@@ -116,7 +118,7 @@ describe('management console page', () => {
     const html = renderConsolePage();
     // The table renders only row fields; heavy detail comes from a dedicated
     // per-job request (plus logs) when a row is selected.
-    expect(html).toContain('/game-imports?page=');
+    expect(html).toContain('jobsQuery()');
     expect(html).toContain('j.sourceUrl');
     expect(html).toContain('j.progress');
     expect(html).toContain('j.updatedAt');
@@ -140,6 +142,27 @@ describe('management console page', () => {
     expect(html).toContain('.workbench-right #detail{overflow-y:auto');
     // Narrow viewports fall back to a single stacked column.
     expect(html).toContain('@media (max-width:980px)');
+  });
+
+  it('is scoped to one folder: new imports land in that folder', () => {
+    const html = renderConsolePage('f-123');
+    // The folder id is embedded and used for every scoped call.
+    expect(html).toContain('var FOLDER_ID = "f-123"');
+    expect(html).toContain(
+      'JSON.stringify({ sourceUrls: urls, folderId: FOLDER_ID })',
+    );
+    expect(html).toContain(
+      'JSON.stringify({ sourceUrls: chunk, folderId: FOLDER_ID })',
+    );
+    // The title resolves the folder name from the folders API.
+    expect(html).toContain('api("/folders/" + encodeURIComponent(FOLDER_ID))');
+    // Home (folders) is reachable from the nav.
+    expect(html).toContain('href="/"');
+  });
+
+  it('defaults to the ungrouped collection when no folder is given', () => {
+    const html = renderConsolePage();
+    expect(html).toContain('var FOLDER_ID = "none"');
   });
 
   it('polls the job list only while jobs are in flight, never when idle', () => {

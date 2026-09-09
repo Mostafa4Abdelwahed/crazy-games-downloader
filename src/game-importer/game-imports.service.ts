@@ -7,7 +7,7 @@ import {
   Inject,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { FindOptionsWhere, In, IsNull, Repository } from 'typeorm';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -19,6 +19,7 @@ import { ImportQueueService } from './queue/import.queue';
 import { ImportJob, ImportJobLogEntry, ImportState } from './core/types';
 import { DiagnosticLevel, ImportDiagnostic } from './core/diagnostics';
 import { SourceRegistry } from './sources/source-registry';
+import { FoldersService } from './folders/folders.service';
 import {
   ListedGamesResult,
   SourceAccessRestrictedError,
@@ -243,6 +244,7 @@ function toJob(e: ImportJobEntity): ImportJob {
     errorCode: e.errorCode ?? null,
     diagnostics: toDiagnostics(e.diagnostics),
     packageUrl: e.packageUrl,
+    folderId: e.folderId ?? null,
     createdAt: e.createdAt?.toISOString?.() ?? new Date().toISOString(),
     updatedAt: e.updatedAt?.toISOString?.() ?? new Date().toISOString(),
   };
@@ -274,6 +276,7 @@ export class GameImportsService implements OnModuleInit {
     private readonly policy: SourcePolicyService,
     private readonly queue: ImportQueueService,
     private readonly sources: SourceRegistry,
+    private readonly folders: FoldersService,
     @Inject(GAME_BROWSER_OPENER)
     private readonly openInBrowser: (
       url: string,
@@ -306,8 +309,11 @@ export class GameImportsService implements OnModuleInit {
     }
   }
 
-  async create(sourceUrl: string): Promise<ImportJob> {
-    return (await this.createOne(sourceUrl)).job;
+  async create(
+    sourceUrl: string,
+    folderId?: string | null,
+  ): Promise<ImportJob> {
+    return (await this.createOne(sourceUrl, folderId)).job;
   }
 
   /**
@@ -317,9 +323,12 @@ export class GameImportsService implements OnModuleInit {
    *    never a duplicate row;
    *  - when the previous run for the game reached a terminal state
    *    (completed/failed/cancelled), a fresh run is started ("update").
+   *
+   * `folderId` scopes the job into a console folder (validated first).
    */
   private async createOne(
     sourceUrl: string,
+    folderId?: string | null,
   ): Promise<{ job: ImportJob; reused: boolean }> {
     // Validate SourcePolicy BEFORE creating/enqueueing anything to download.
     try {
@@ -327,6 +336,7 @@ export class GameImportsService implements OnModuleInit {
     } catch (err) {
       throw new BadRequestException((err as Error).message);
     }
+    if (folderId) await this.folders.assertExists(folderId);
     const key = normalizeSourceKey(sourceUrl);
     const prior = await this.jobs.find({
       where: { sourceKey: key },
@@ -359,6 +369,7 @@ export class GameImportsService implements OnModuleInit {
       currentStep: 'queued',
       error: null,
       packageUrl: null,
+      folderId: folderId ?? null,
       logs: [
         {
           at: new Date().toISOString(),
@@ -381,6 +392,7 @@ export class GameImportsService implements OnModuleInit {
    */
   async createBatch(
     sourceUrls: string[],
+    folderId?: string | null,
   ): Promise<{ created: number; reused: number; jobs: ImportJob[] }> {
     const seen = new Map<string, string>();
     for (const raw of sourceUrls ?? []) {
@@ -393,6 +405,7 @@ export class GameImportsService implements OnModuleInit {
     if (!urls.length) {
       throw new BadRequestException('Provide at least one game URL.');
     }
+    if (folderId) await this.folders.assertExists(folderId);
     // Fail fast if any URL is not allowlisted.
     const blocked: string[] = [];
     for (const url of urls) {
@@ -413,7 +426,7 @@ export class GameImportsService implements OnModuleInit {
     let reused = 0;
     const jobs: ImportJob[] = [];
     for (const url of urls) {
-      const r = await this.createOne(url);
+      const r = await this.createOne(url, folderId);
       if (r.reused) reused += 1;
       else created += 1;
       jobs.push(r.job);
@@ -496,10 +509,28 @@ export class GameImportsService implements OnModuleInit {
    * nothing about queueing or processing. Paginated so large queues stay
    * browsable without pulling everything at once.
    */
-  async list(page = 1, limit = 50): Promise<ImportJobPage> {
+  /**
+   * Most-recent jobs first (for the management console). Read-only; changes
+   * nothing about queueing or processing. Paginated so large queues stay
+   * browsable without pulling everything at once. When `folderId` is given
+   * only that folder's jobs are listed; `folderId='none'` lists only
+   * ungrouped jobs; omitted lists everything.
+   */
+  async list(
+    page = 1,
+    limit = 50,
+    folderId?: string | null,
+  ): Promise<ImportJobPage> {
     const pageSize = Math.min(Math.max(limit, 1), 200);
     const cur = Math.max(page, 1);
+    const where: FindOptionsWhere<ImportJobEntity> | undefined =
+      folderId === undefined || folderId === null
+        ? undefined
+        : folderId === 'none'
+          ? { folderId: IsNull() }
+          : { folderId };
     const [entities, total] = await this.jobs.findAndCount({
+      ...(where ? { where } : {}),
       order: { updatedAt: 'DESC' },
       skip: (cur - 1) * pageSize,
       take: pageSize,
