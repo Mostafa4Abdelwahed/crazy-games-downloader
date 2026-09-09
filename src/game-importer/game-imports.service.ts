@@ -31,16 +31,6 @@ const LEVELS: DiagnosticLevel[] = ['info', 'warning', 'error'];
 /** DI token for the function that opens a URL in the default browser. */
 export const GAME_BROWSER_OPENER = Symbol('GAME_BROWSER_OPENER');
 
-const TERMINAL_STATES = new Set<ImportState>([
-  'completed',
-  'failed',
-  'cancelled',
-]);
-
-function isTerminal(s: ImportState): boolean {
-  return TERMINAL_STATES.has(s);
-}
-
 /** Valid `status` filter values for the jobs listing (console). */
 const VALID_STATUSES = new Set<string>([
   'queued',
@@ -366,27 +356,43 @@ export class GameImportsService implements OnModuleInit {
     }
   }
 
+  /**
+   * Create one import. The result reports whether the game already
+   * existed (`reused`) and — when it did — the name of the folder the
+   * existing import lives in, so the UI can say where to find it.
+   */
   async create(
     sourceUrl: string,
     folderId?: string | null,
-  ): Promise<ImportJob> {
-    return (await this.createOne(sourceUrl, folderId)).job;
+  ): Promise<
+    ImportJob & { reused?: boolean; existingFolderName?: string | null }
+  > {
+    const r = await this.createOne(sourceUrl, folderId);
+    return {
+      ...r.job,
+      reused: r.reused,
+      ...(r.reused ? { existingFolderName: r.existingFolderName ?? null } : {}),
+    };
   }
 
   /**
-   * Create (or reuse) one import. Deduplication policy:
-   *  - when the same game is already in flight (queued/detecting/...),
-   *    the existing job is returned untouched-ish (logged as reused) —
-   *    never a duplicate row;
-   *  - when the previous run for the game reached a terminal state
-   *    (completed/failed/cancelled), a fresh run is started ("update").
+   * Create (or reuse) one import. Deduplication is GLOBAL per game:
+   *  - any prior row for the same game (ANY status, including failed or
+   *    cancelled) means the import already exists — the existing job is
+   *    returned as `reused` with its folder name, never a duplicate row;
+   *  - a game can only be re-run after its previous rows are removed
+   *    (Settings → delete all jobs, or per-row delete).
    *
    * `folderId` scopes the job into a console folder (validated first).
    */
   private async createOne(
     sourceUrl: string,
     folderId?: string | null,
-  ): Promise<{ job: ImportJob; reused: boolean }> {
+  ): Promise<{
+    job: ImportJob;
+    reused: boolean;
+    existingFolderName?: string | null;
+  }> {
     // Validate SourcePolicy BEFORE creating/enqueueing anything to download.
     try {
       this.policy.assertAllowed(sourceUrl);
@@ -400,19 +406,24 @@ export class GameImportsService implements OnModuleInit {
       order: { updatedAt: 'DESC' },
       take: 1,
     });
-    if (prior.length && !isTerminal(prior[0].status)) {
+    if (prior.length) {
       const existing = prior[0];
+      const folderName = await this.folderNameOf(existing.folderId);
       existing.logs = [
         ...(existing.logs ?? []),
         {
           at: new Date().toISOString(),
           level: 'info',
-          message: 'Duplicate submit — import already in progress; reused',
+          message: 'Duplicate submit — import already exists; reused',
           step: existing.currentStep ?? existing.status,
         },
       ];
       await this.jobs.save(existing);
-      return { job: toJob(existing), reused: true };
+      return {
+        job: toJob(existing),
+        reused: true,
+        existingFolderName: folderName,
+      };
     }
     const entity = this.jobs.create({
       id: randomUUID(),
@@ -443,15 +454,34 @@ export class GameImportsService implements OnModuleInit {
     return { job: toJob(saved), reused: false };
   }
 
+  /** Resolve a folder's display name (null for ungrouped/unknown). */
+  private async folderNameOf(
+    folderId: string | null | undefined,
+  ): Promise<string | null> {
+    if (!folderId) return null;
+    const view = await this.folders.get(folderId).catch(() => null);
+    return view?.name ?? null;
+  }
+
   /**
    * Batch-create imports from several game URLs (one line each). Duplicate
-   * URLs inside the batch are coalesced; each URL follows the same
-   * reuse-or-update policy as `create`.
+   * URLs inside the batch are coalesced; each URL follows the same global
+   * reuse policy as `create`. `duplicates` reports every already-existing
+   * game with the folder it lives in, so the UI can tell the operator.
    */
   async createBatch(
     sourceUrls: string[],
     folderId?: string | null,
-  ): Promise<{ created: number; reused: number; jobs: ImportJob[] }> {
+  ): Promise<{
+    created: number;
+    reused: number;
+    jobs: ImportJob[];
+    duplicates: {
+      sourceUrl: string;
+      jobId: string;
+      folderName: string | null;
+    }[];
+  }> {
     const seen = new Map<string, string>();
     for (const raw of sourceUrls ?? []) {
       const url = raw.trim();
@@ -483,13 +513,26 @@ export class GameImportsService implements OnModuleInit {
     let created = 0;
     let reused = 0;
     const jobs: ImportJob[] = [];
+    const duplicates: {
+      sourceUrl: string;
+      jobId: string;
+      folderName: string | null;
+    }[] = [];
     for (const url of urls) {
       const r = await this.createOne(url, folderId);
-      if (r.reused) reused += 1;
-      else created += 1;
+      if (r.reused) {
+        reused += 1;
+        duplicates.push({
+          sourceUrl: r.job.sourceUrl,
+          jobId: r.job.id,
+          folderName: r.existingFolderName ?? null,
+        });
+      } else {
+        created += 1;
+      }
       jobs.push(r.job);
     }
-    return { created, reused, jobs };
+    return { created, reused, jobs, duplicates };
   }
 
   /**

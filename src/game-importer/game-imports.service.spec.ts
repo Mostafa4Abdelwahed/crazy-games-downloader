@@ -53,7 +53,16 @@ function makeService(repoOverrides: Record<string, jest.Mock> = {}) {
   const policy = { assertAllowed: jest.fn() };
   const queue = { enqueue: jest.fn(async () => undefined) };
   const sources = { findAdapter: jest.fn() };
-  const folders = { assertExists: jest.fn(async () => undefined) };
+  const folders = {
+    assertExists: jest.fn(async () => undefined),
+    get: jest.fn(async (id: string) => ({
+      id,
+      name: 'My folder',
+      createdAt: new Date().toISOString(),
+      jobCounts: { total: 0, inFlight: 0, completed: 0, failed: 0 },
+      packagesRoot: '/packages',
+    })),
+  };
   const launchServer = jest.fn(async () => ({
     url: 'http://localhost:54321/',
     port: 54321,
@@ -121,15 +130,32 @@ describe('GameImportsService dedup + batch', () => {
     expect(Object.values(queue.enqueue.mock.calls)).toHaveLength(0);
   });
 
-  it('starts a fresh run (update) after a terminal status', async () => {
+  it('reuses a game that already exists, even after a failed run', async () => {
     const failed = toEntity({ id: 'old-run', status: 'failed' });
     const { service, queue } = makeService({
       find: jest.fn(async () => [failed]),
     });
-    const job = await service.create('https://www.crazygames.com/game/foo');
-    expect(job.id).not.toBe('old-run');
-    expect(job.status).toBe('queued');
-    expect(queue.enqueue).toHaveBeenCalledWith(job.id);
+    const res = await service.create('https://www.crazygames.com/game/foo');
+    // Global dedup: the failed row is reused, never re-run.
+    expect(res.id).toBe('old-run');
+    expect(res.reused).toBe(true);
+    expect(res.existingFolderName).toBeNull();
+    expect(Object.values(queue.enqueue.mock.calls)).toHaveLength(0);
+  });
+
+  it('reports the folder name of an already-existing game', async () => {
+    const existing = toEntity({
+      id: 'old-run',
+      status: 'completed',
+      folderId: 'f-1',
+    });
+    const { service, queue } = makeService({
+      find: jest.fn(async () => [existing]),
+    });
+    const res = await service.create('https://www.crazygames.com/game/foo');
+    expect(res.reused).toBe(true);
+    expect(res.existingFolderName).toBe('My folder');
+    expect(Object.values(queue.enqueue.mock.calls)).toHaveLength(0);
   });
 
   it('rejects an unallowlisted URL before creating anything', async () => {
@@ -164,6 +190,35 @@ describe('GameImportsService dedup + batch', () => {
     ]);
     expect(res.jobs).toHaveLength(1);
     expect(queue.enqueue.mock.calls).toHaveLength(1);
+  });
+
+  it('batch reports duplicates with their folder names', async () => {
+    const existing = toEntity({
+      id: 'prior-run',
+      status: 'completed',
+      folderId: 'f-9',
+    });
+    const { service } = makeService({
+      find: jest.fn(async ({ where }: never) =>
+        (where as { sourceKey: string }).sourceKey ===
+        normalizeSourceKey('https://www.crazygames.com/game/foo')
+          ? [existing]
+          : [],
+      ),
+    });
+    const res = await service.createBatch([
+      'https://www.crazygames.com/game/foo',
+      'https://www.crazygames.com/game/new',
+    ]);
+    expect(res.created).toBe(1);
+    expect(res.reused).toBe(1);
+    expect(res.duplicates).toEqual([
+      {
+        sourceUrl: 'https://www.crazygames.com/game/foo',
+        jobId: 'prior-run',
+        folderName: 'My folder',
+      },
+    ]);
   });
 
   it('fails the whole batch fast when any URL is not allowlisted', async () => {

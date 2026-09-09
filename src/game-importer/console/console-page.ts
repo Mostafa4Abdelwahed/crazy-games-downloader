@@ -174,6 +174,8 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '.copy-btn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}\n' +
     'code{background:var(--surface-raised);padding:2px 6px;border-radius:6px;font-family:ui-monospace,Consolas,monospace;font-size:.85em;color:var(--text-2);overflow-wrap:anywhere}\n' +
     '.err{color:var(--error);font-size:.9rem;margin-top:8px;overflow-wrap:anywhere}\n' +
+    '.dup-list{margin-top:10px;max-height:160px;color:var(--warn)}\n' +
+    '.dup-list[hidden]{display:none}\n' +
     '.warn{color:var(--warn)}\n' +
     '.ok{color:var(--ok)}\n' +
     '.muted{color:var(--text-3);font-size:.85rem;overflow-wrap:anywhere}\n' +
@@ -238,6 +240,7 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '<span id="formStatus" class="muted"></span>\n' +
     '</div>\n' +
     '<div id="formError" class="err"></div>\n' +
+    '<pre id="formDupList" class="dup-list" hidden></pre>\n' +
     '</form>\n' +
     '</section>\n' +
     '<section class="card">\n' +
@@ -600,7 +603,21 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '    }).then(function (r) {\n' +
     '      btn.disabled = false;\n' +
     '      document.getElementById("sourceUrls").value = "";\n' +
-    '      status.textContent = "Started " + r.created + " new, reused " + r.reused + " already running.";\n' +
+    '      status.textContent = "Started " + r.created + " new" +\n' +
+    '        (r.reused ? ", skipped " + r.reused + " already existing" : "") + ".";\n' +
+    '      var detail = document.getElementById("formDupList");\n' +
+    '      if (detail) {\n' +
+    '        if (r.duplicates && r.duplicates.length) {\n' +
+    '          var dupMsg = r.duplicates.map(function (d) {\n' +
+    '            return d.sourceUrl + " — in folder: " + (d.folderName ? d.folderName : "Ungrouped");\n' +
+    '          }).join("\\n");\n' +
+    '          detail.textContent = dupMsg;\n' +
+    '          detail.hidden = false;\n' +
+    '        } else {\n' +
+    '          detail.textContent = "";\n' +
+    '          detail.hidden = true;\n' +
+    '        }\n' +
+    '      }\n' +
     '      jobPage = 1;\n' +
     '      if (r.jobs && r.jobs.length) selectJob(r.jobs[0].id);\n' +
     '    }).catch(function (e) {\n' +
@@ -661,13 +678,19 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '    );\n' +
     '    if (!checked.length) return;\n' +
     '    btn.disabled = true;\n' +
-    '    var totals = { created: 0, reused: 0 };\n' +
+    '    var totals = { created: 0, reused: 0, dups: [] };\n' +
     '    var next = function (i) {\n' +
     '      var chunk = checked.slice(i, i + 25);\n' +
     '      if (!chunk.length) {\n' +
     '        btn.disabled = false;\n' +
     '        closeDiscoverModal();\n' +
-    '        document.getElementById("discoverStatus").textContent = "Started " + totals.created + " new, reused " + totals.reused + " already running.";\n' +
+    '        document.getElementById("discoverStatus").textContent = "Started " + totals.created + " new" +\n' +
+    '          (totals.reused ? ", skipped " + totals.reused + " already existing" : "") + ".";\n' +
+    '        if (totals.dups.length) {\n' +
+    '          document.getElementById("discoverError").textContent =\n' +
+    '            totals.dups.length + " game(s) already imported (in folder" + (totals.dups.length > 1 ? "s" : "") + ": " +\n' +
+    '            totals.dups.map(function (d) { return d.folderName ? d.folderName : "Ungrouped"; }).join(", ") + ").";\n' +
+    '        }\n' +
     '        jobPage = 1;\n' +
     '        loadJobs();\n' +
     '        return;\n' +
@@ -679,6 +702,7 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '      }).then(function (r) {\n' +
     '        totals.created += r.created;\n' +
     '        totals.reused += r.reused;\n' +
+    '        if (r.duplicates) totals.dups = totals.dups.concat(r.duplicates);\n' +
     '        next(i + 25);\n' +
     '      }, function (e) {\n' +
     '        btn.disabled = false;\n' +

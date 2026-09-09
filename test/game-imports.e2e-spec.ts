@@ -52,10 +52,19 @@ describe('Game imports integration', () => {
   let storeDir: string;
 
   const base = 'https://partner.example/games/demo';
+  // Distinct game URLs (same content) so each e2e test can create its own
+  // game under the global dedup (one row per game URL, ever).
+  const gameUrl = (n: number) => `https://partner.example/games/demo-${n}`;
   // NOTE: relative "Build/..." refs resolve against the *directory* of the
   // base URL (demo is treated as a file segment per WHATWG URL semantics).
   const siteMap: Record<string, Buffer> = {
     [base]: Buffer.from(ENTRY_HTML),
+    ['https://partner.example/games/demo-1']: Buffer.from(ENTRY_HTML),
+    ['https://partner.example/games/demo-2']: Buffer.from(ENTRY_HTML),
+    ['https://partner.example/games/demo-3']: Buffer.from(ENTRY_HTML),
+    ['https://partner.example/games/demo-4']: Buffer.from(ENTRY_HTML),
+    ['https://partner.example/games/demo-5']: Buffer.from(ENTRY_HTML),
+    ['https://partner.example/games/demo-6']: Buffer.from(ENTRY_HTML),
     ['https://partner.example/games/Build/test.loader.js']:
       Buffer.from(LOADER_JS),
     ['https://partner.example/games/Build/test.data']: Buffer.from(
@@ -418,18 +427,19 @@ describe('Game imports integration', () => {
           .expect(201)
       ).body;
 
-      // Two jobs in the folder, one ungrouped.
+      // Two jobs in the folder, one ungrouped. Distinct games: global
+      // dedup means each URL maps to exactly one row, ever.
       const a = await request(app.getHttpServer())
         .post('/game-imports')
-        .send({ sourceUrl: base, folderId: folder.id })
+        .send({ sourceUrl: gameUrl(1), folderId: folder.id })
         .expect(201);
       await request(app.getHttpServer())
         .post('/game-imports/batch')
-        .send({ sourceUrls: [base], folderId: folder.id })
+        .send({ sourceUrls: [gameUrl(2)], folderId: folder.id })
         .expect(201);
       const ungroupedJob = await request(app.getHttpServer())
         .post('/game-imports')
-        .send({ sourceUrl: base })
+        .send({ sourceUrl: gameUrl(3) })
         .expect(201);
       await waitFor(a.body.id, ['completed', 'failed']);
 
@@ -505,14 +515,14 @@ describe('Game imports integration', () => {
     });
 
     it('numbers jobs sequentially and supports status filter + sorting', async () => {
-      // Create two jobs; they get consecutive seq numbers.
+      // Create two distinct jobs; they get consecutive seq numbers.
       const a = await request(app.getHttpServer())
         .post('/game-imports')
-        .send({ sourceUrl: base })
+        .send({ sourceUrl: gameUrl(4) })
         .expect(201);
       const b = await request(app.getHttpServer())
         .post('/game-imports')
-        .send({ sourceUrl: base })
+        .send({ sourceUrl: gameUrl(5) })
         .expect(201);
       await waitFor(a.body.id, ['completed', 'failed']);
       await waitFor(b.body.id, ['completed', 'failed']);
@@ -545,6 +555,68 @@ describe('Game imports integration', () => {
       await request(app.getHttpServer())
         .get('/game-imports?status=bogus')
         .expect(200);
+    });
+
+    it('globally dedupes games across folders, reporting where they live', async () => {
+      // First import lands in a folder.
+      const folder = (
+        await request(app.getHttpServer())
+          .post('/folders')
+          .send({ name: 'Dedup home' })
+          .expect(201)
+      ).body;
+      const first = await request(app.getHttpServer())
+        .post('/game-imports')
+        .send({ sourceUrl: gameUrl(6), folderId: folder.id })
+        .expect(201);
+      expect(first.body.reused).toBe(false);
+      await waitFor(first.body.id, ['completed', 'failed']);
+
+      // Re-adding the same game to ANOTHER folder reuses the row and
+      // reports the folder it actually lives in.
+      const other = (
+        await request(app.getHttpServer())
+          .post('/folders')
+          .send({ name: 'Other folder' })
+          .expect(201)
+      ).body;
+      const again = await request(app.getHttpServer())
+        .post('/game-imports')
+        .send({ sourceUrl: gameUrl(6), folderId: other.id })
+        .expect(201);
+      expect(again.body.reused).toBe(true);
+      expect(again.body.id).toBe(first.body.id);
+      expect(again.body.existingFolderName).toBe('Dedup home');
+
+      // Even a FAILED game is never duplicated…
+      const failedGame = `https://partner.example/games/missing-${Date.now()}`;
+      const f1 = await request(app.getHttpServer())
+        .post('/game-imports')
+        .send({ sourceUrl: failedGame })
+        .expect(201);
+      await waitFor(f1.body.id, ['failed']);
+      const f2 = await request(app.getHttpServer())
+        .post('/game-imports')
+        .send({ sourceUrl: failedGame })
+        .expect(201);
+      expect(f2.body.id).toBe(f1.body.id);
+      expect(f2.body.reused).toBe(true);
+      // …and batches report duplicates with their folders.
+      const batch = await request(app.getHttpServer())
+        .post('/game-imports/batch')
+        .send({ sourceUrls: [gameUrl(6), failedGame] })
+        .expect(201);
+      expect(batch.body.created).toBe(0);
+      expect(batch.body.reused).toBe(2);
+      expect(batch.body.duplicates).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            jobId: first.body.id,
+            folderName: 'Dedup home',
+          }),
+          expect.objectContaining({ jobId: f1.body.id, folderName: null }),
+        ]),
+      );
     });
   });
 });
