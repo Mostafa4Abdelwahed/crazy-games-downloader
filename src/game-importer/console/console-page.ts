@@ -143,6 +143,8 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '.btn.ghost:hover{background:var(--ghost-hover)}\n' +
     '.btn.light{background:#f9faff;color:#2f3148;box-shadow:var(--shadow-1)}\n' +
     '.btn.light:hover{background:#ffffff}\n' +
+    '.btn.danger{background:var(--error);color:#fff;box-shadow:var(--shadow-1)}\n' +
+    '.btn.danger:hover{filter:brightness(1.08)}\n' +
     '.theme-btn{margin-left:auto;display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:999px;background:var(--ghost-bg);border:1px solid var(--divider);color:var(--text-2);cursor:pointer;transition:background .15s,color .15s}\n' +
     '.theme-btn:hover{background:var(--ghost-hover);color:var(--text)}\n' +
     '.nav-tabs{display:flex;gap:8px}\n' +
@@ -530,7 +532,10 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '      html += "<p class=\\"ok\\"><strong>Package:</strong> <code>" + esc(j.packageUrl) + "</code></p>" + runHelp(j.packageUrl, j.id);\n' +
     '    }\n' +
     '    if (["failed", "completed", "cancelled"].indexOf(j.status) >= 0) {\n' +
-    '      html += "<p><button id=\\"reimportBtn\\" class=\\"btn ghost\\"><svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><path d=\\"M23 4v6h-6\\"/><path d=\\"M20.49 15a9 9 0 1 1-2.12-9.36L23 10\\"/></svg>Re-import</button> <span class=\\"muted\\">Runs this game again (no duplicate is kept for in-flight runs).</span></p>";\n' +
+    '      html += "<p><button id=\\"reimportBtn\\" class=\\"btn ghost\\"><svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><path d=\\"M23 4v6h-6\\"/><path d=\\"M20.49 15a9 9 0 1 1-2.12-9.36L23 10\\"/></svg>Re-import</button> <span class=\\"muted\\">Forces a fresh run even though this game already exists.</span></p>";\n' +
+    '    }\n' +
+    '    if (["failed", "completed", "cancelled"].indexOf(j.status) >= 0) {\n' +
+    '      html += "<p><button id=\\"deleteJobBtn\\" class=\\"btn danger\\"><svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><polyline points=\\"3 6 5 6 21 6\\"/><path d=\\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\\"/></svg>Delete job</button> <span class=\\"muted\\">Removes the job and its package from disk.</span></p>";\n' +
     '    }\n' +
     '    if (["queued", "detecting", "resolving", "downloading", "extracting", "validating", "uploading"].indexOf(j.status) >= 0) {\n' +
     '      html += "<p><button id=\\"cancelBtn\\" class=\\"btn light\\">Cancel job</button></p>";\n' +
@@ -555,11 +560,32 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '    var rb = document.getElementById("reimportBtn");\n' +
     '    if (rb) rb.addEventListener("click", function () {\n' +
     '      rb.disabled = true;\n' +
+    '      var body = { sourceUrl: j.sourceUrl, force: true };\n' +
+    '      var folderScope = j.folderId ? j.folderId : (FOLDER_ID === "none" ? null : FOLDER_ID);\n' +
+    '      if (folderScope) body.folderId = folderScope;\n' +
     '      api("/game-imports", {\n' +
     '        method: "POST",\n' +
     '        headers: { "Content-Type": "application/json" },\n' +
-    '        body: JSON.stringify({ sourceUrl: j.sourceUrl })\n' +
+    '        body: JSON.stringify(body)\n' +
     '      }).then(function (nj) { selectJob(nj.id); }, function (e) { rb.disabled = false; alert(e.message); });\n' +
+    '    });\n' +
+    '    var db = document.getElementById("deleteJobBtn");\n' +
+    '    if (db) db.addEventListener("click", function () {\n' +
+    '      var label = j.seq != null ? ("job #" + j.seq) : "this job";\n' +
+    '      if (!window.confirm("Delete " + label + "?\\nThis removes its package from disk.")) return;\n' +
+    '      db.disabled = true;\n' +
+    '      api("/game-imports/" + encodeURIComponent(j.id), { method: "DELETE" }).then(function () {\n' +
+    '        if (activeTimer) { clearInterval(activeTimer); activeTimer = null; }\n' +
+    '        selectedId = null;\n' +
+    '        var el = document.getElementById("detail");\n' +
+    '        el.innerHTML = "<p class=\\"ok\\">Job deleted (package removed from disk).</p>";\n' +
+    '        el.classList.remove("muted");\n' +
+    '        jobPage = 1;\n' +
+    '        loadJobs();\n' +
+    '      }, function (e) {\n' +
+    '        db.disabled = false;\n' +
+    '        alert(e.message);\n' +
+    '      });\n' +
     '    });\n' +
     '  }\n' +
     '  var TERMINAL = ["completed", "failed", "cancelled"];\n' +

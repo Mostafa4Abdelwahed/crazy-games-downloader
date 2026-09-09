@@ -21,6 +21,12 @@ describe('management console page', () => {
     expect(html).toContain('One game URL per line');
     // Single create endpoint stays available for the re-import button.
     expect(html).toContain('"/game-imports"');
+    // Re-import forces a fresh run past the global dedup; per-job delete
+    // asks for confirmation then calls DELETE on the job.
+    expect(html).toContain('force: true');
+    expect(html).toContain('deleteJobBtn');
+    expect(html).toContain('window.confirm');
+    expect(html).toContain('method: "DELETE"');
   });
 
   it('drives only the existing public import API', () => {

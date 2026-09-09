@@ -2,6 +2,7 @@ import {
   ArrayMaxSize,
   ArrayNotEmpty,
   IsArray,
+  IsBoolean,
   IsOptional,
   IsString,
   IsUrl,
@@ -20,4 +21,12 @@ export class BatchImportDto {
   @IsString()
   @MaxLength(64)
   folderId?: string;
+
+  /**
+   * Skip the global dedup check and start fresh runs even for games that
+   * already exist (explicit re-import intent).
+   */
+  @IsOptional()
+  @IsBoolean()
+  force?: boolean;
 }

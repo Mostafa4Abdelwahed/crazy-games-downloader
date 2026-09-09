@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { GameImportsService, normalizeSourceKey } from './game-imports.service';
@@ -43,7 +43,9 @@ function makeService(repoOverrides: Record<string, jest.Mock> = {}) {
       id: where.id,
     })),
     find: jest.fn(async () => [] as unknown[]),
+    findOne: jest.fn(async () => null),
     findAndCount: jest.fn(async () => [[], 0] as unknown[]),
+    remove: jest.fn(async (e) => e),
     createQueryBuilder: jest.fn(() => ({
       select: jest.fn().mockReturnThis(),
       getRawOne: jest.fn(async () => ({ max: String(seqMax) })),
@@ -583,5 +585,157 @@ describe('GameImportsService run/stop local server', () => {
       url: null,
       stopped: false,
     });
+  });
+});
+
+describe('GameImportsService force re-import', () => {
+  it('force bypasses the global dedup and starts a fresh run', async () => {
+    const prior = toEntity({ id: 'old-run', status: 'failed' });
+    const { service, queue } = makeService({
+      find: jest.fn(async () => [prior]),
+    });
+    const job = await service.create(
+      'https://www.crazygames.com/game/foo',
+      null,
+      true,
+    );
+    expect(job.id).not.toBe('old-run');
+    expect(job.status).toBe('queued');
+    expect(job.reused).toBe(false);
+    expect(queue.enqueue).toHaveBeenCalledWith(job.id);
+  });
+
+  it('force applies to batches too', async () => {
+    const prior = toEntity({ id: 'old-run', status: 'completed' });
+    const { service } = makeService({
+      find: jest.fn(async () => [prior]),
+    });
+    const res = await service.createBatch(
+      ['https://www.crazygames.com/game/foo'],
+      null,
+      true,
+    );
+    expect(res.created).toBe(1);
+    expect(res.reused).toBe(0);
+    expect(res.duplicates).toEqual([]);
+  });
+
+  it('treats "none" as ungrouped instead of a folder id', async () => {
+    const { service, folders } = makeService();
+    await service.create('https://www.crazygames.com/game/foo', 'none');
+    // No folder validation, no crash; the job is filed ungrouped.
+    expect(folders.assertExists).not.toHaveBeenCalled();
+    await service.createBatch(['https://www.crazygames.com/game/foo'], 'none');
+    expect(folders.assertExists).not.toHaveBeenCalled();
+  });
+});
+
+describe('GameImportsService remove (per-job delete)', () => {
+  const OLD_ENV = { ...process.env };
+  let workRoot: string;
+  let storeRoot: string;
+
+  async function exists(p: string): Promise<boolean> {
+    try {
+      await stat(p);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  beforeEach(async () => {
+    workRoot = await mkdtemp(path.join(os.tmpdir(), 'rm-work-'));
+    storeRoot = await mkdtemp(path.join(os.tmpdir(), 'rm-store-'));
+    process.env.IMPORT_WORK_DIR = workRoot;
+    process.env.STORAGE_LOCAL_ROOT = storeRoot;
+  });
+
+  afterEach(async () => {
+    process.env = { ...OLD_ENV };
+    await rm(workRoot, { recursive: true, force: true });
+    await rm(storeRoot, { recursive: true, force: true });
+  });
+
+  it('removes the row, its package dir and its work dir', async () => {
+    const pkgDir = path.join(storeRoot, 'job-1');
+    await mkdir(pkgDir, { recursive: true });
+    await writeFile(path.join(pkgDir, 'index.html'), 'x');
+    await mkdir(path.join(workRoot, 'job-1'), { recursive: true });
+    const entity = toEntity({
+      id: 'job-1',
+      status: 'completed',
+      packageUrl: pkgDir,
+    });
+    const { service, repo } = makeService({
+      findOne: jest.fn(async () => entity),
+    });
+    const res = await service.remove('job-1');
+    expect(res).toEqual({
+      deleted: true,
+      clearedPackage: true,
+      clearedWork: true,
+      wasRunning: false,
+    });
+    expect(repo.remove).toHaveBeenCalledWith(entity);
+    expect(await exists(pkgDir)).toBe(false);
+    expect(await exists(path.join(workRoot, 'job-1'))).toBe(false);
+  });
+
+  it('never deletes package paths outside the storage root', async () => {
+    const outside = await mkdtemp(path.join(os.tmpdir(), 'rm-outside-'));
+    await writeFile(path.join(outside, 'keep.txt'), 'x');
+    const entity = toEntity({
+      id: 'job-9',
+      status: 'failed',
+      packageUrl: outside,
+    });
+    try {
+      const { service } = makeService({
+        findOne: jest.fn(async () => entity),
+      });
+      const res = await service.remove('job-9');
+      expect(res.clearedPackage).toBe(false);
+      // The foreign directory is untouched.
+      expect(await exists(path.join(outside, 'keep.txt'))).toBe(true);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('stops a running server before deleting its job', async () => {
+    const pkgDir = path.join(storeRoot, 'job-run');
+    await mkdir(pkgDir, { recursive: true });
+    const entity = toEntity({
+      id: 'job-run',
+      status: 'completed',
+      packageUrl: pkgDir,
+    });
+    const { service, launchServer } = makeService({
+      findOne: jest.fn(async () => entity),
+    });
+    await service.run('job-run');
+    const launched = await launchServer.mock.results[0].value;
+    const res = await service.remove('job-run');
+    expect(res.wasRunning).toBe(true);
+    expect(launched.child.kill).toHaveBeenCalled();
+  });
+
+  it('cancels an in-flight job first so the worker bails out', async () => {
+    const entity = toEntity({ id: 'job-2', status: 'downloading' });
+    const { service, repo } = makeService({
+      findOne: jest.fn(async () => entity),
+    });
+    await service.remove('job-2');
+    const saved = repo.save.mock.calls.at(-1)?.[0] as { status?: string };
+    expect(saved.status).toBe('cancelled');
+    expect(repo.remove).toHaveBeenCalledWith(entity);
+  });
+
+  it('404s for an unknown job id', async () => {
+    const { service } = makeService();
+    await expect(service.remove('nope')).rejects.toThrow(
+      'Import job not found',
+    );
   });
 });

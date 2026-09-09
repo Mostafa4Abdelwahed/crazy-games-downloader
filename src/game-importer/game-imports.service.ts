@@ -360,14 +360,16 @@ export class GameImportsService implements OnModuleInit {
    * Create one import. The result reports whether the game already
    * existed (`reused`) and — when it did — the name of the folder the
    * existing import lives in, so the UI can say where to find it.
+   * `force` starts a fresh run even when the game already exists.
    */
   async create(
     sourceUrl: string,
     folderId?: string | null,
+    force = false,
   ): Promise<
     ImportJob & { reused?: boolean; existingFolderName?: string | null }
   > {
-    const r = await this.createOne(sourceUrl, folderId);
+    const r = await this.createOne(sourceUrl, folderId, force);
     return {
       ...r.job,
       reused: r.reused,
@@ -380,14 +382,16 @@ export class GameImportsService implements OnModuleInit {
    *  - any prior row for the same game (ANY status, including failed or
    *    cancelled) means the import already exists — the existing job is
    *    returned as `reused` with its folder name, never a duplicate row;
-   *  - a game can only be re-run after its previous rows are removed
-   *    (Settings → delete all jobs, or per-row delete).
+   *  - `force: true` skips the dedup check and always starts a fresh run
+   *    (explicit Re-import intent from the console).
    *
-   * `folderId` scopes the job into a console folder (validated first).
+   * `folderId` scopes the job into a console folder (validated first);
+   * the pseudo-id `'none'` (and empty values) mean ungrouped.
    */
   private async createOne(
     sourceUrl: string,
     folderId?: string | null,
+    force = false,
   ): Promise<{
     job: ImportJob;
     reused: boolean;
@@ -399,31 +403,34 @@ export class GameImportsService implements OnModuleInit {
     } catch (err) {
       throw new BadRequestException((err as Error).message);
     }
-    if (folderId) await this.folders.assertExists(folderId);
+    const scope = folderId && folderId !== 'none' ? folderId : null;
+    if (scope) await this.folders.assertExists(scope);
     const key = normalizeSourceKey(sourceUrl);
-    const prior = await this.jobs.find({
-      where: { sourceKey: key },
-      order: { updatedAt: 'DESC' },
-      take: 1,
-    });
-    if (prior.length) {
-      const existing = prior[0];
-      const folderName = await this.folderNameOf(existing.folderId);
-      existing.logs = [
-        ...(existing.logs ?? []),
-        {
-          at: new Date().toISOString(),
-          level: 'info',
-          message: 'Duplicate submit — import already exists; reused',
-          step: existing.currentStep ?? existing.status,
-        },
-      ];
-      await this.jobs.save(existing);
-      return {
-        job: toJob(existing),
-        reused: true,
-        existingFolderName: folderName,
-      };
+    if (!force) {
+      const prior = await this.jobs.find({
+        where: { sourceKey: key },
+        order: { updatedAt: 'DESC' },
+        take: 1,
+      });
+      if (prior.length) {
+        const existing = prior[0];
+        const folderName = await this.folderNameOf(existing.folderId);
+        existing.logs = [
+          ...(existing.logs ?? []),
+          {
+            at: new Date().toISOString(),
+            level: 'info',
+            message: 'Duplicate submit — import already exists; reused',
+            step: existing.currentStep ?? existing.status,
+          },
+        ];
+        await this.jobs.save(existing);
+        return {
+          job: toJob(existing),
+          reused: true,
+          existingFolderName: folderName,
+        };
+      }
     }
     const entity = this.jobs.create({
       id: randomUUID(),
@@ -438,7 +445,7 @@ export class GameImportsService implements OnModuleInit {
       currentStep: 'queued',
       error: null,
       packageUrl: null,
-      folderId: folderId ?? null,
+      folderId: scope,
       logs: [
         {
           at: new Date().toISOString(),
@@ -472,6 +479,7 @@ export class GameImportsService implements OnModuleInit {
   async createBatch(
     sourceUrls: string[],
     folderId?: string | null,
+    force = false,
   ): Promise<{
     created: number;
     reused: number;
@@ -493,7 +501,8 @@ export class GameImportsService implements OnModuleInit {
     if (!urls.length) {
       throw new BadRequestException('Provide at least one game URL.');
     }
-    if (folderId) await this.folders.assertExists(folderId);
+    const scope = folderId && folderId !== 'none' ? folderId : null;
+    if (scope) await this.folders.assertExists(scope);
     // Fail fast if any URL is not allowlisted.
     const blocked: string[] = [];
     for (const url of urls) {
@@ -519,7 +528,7 @@ export class GameImportsService implements OnModuleInit {
       folderName: string | null;
     }[] = [];
     for (const url of urls) {
-      const r = await this.createOne(url, folderId);
+      const r = await this.createOne(url, scope, force);
       if (r.reused) {
         reused += 1;
         duplicates.push({
@@ -682,6 +691,87 @@ export class GameImportsService implements OnModuleInit {
     const e = await this.jobs.findOne({ where: { id } });
     if (!e) throw new NotFoundException(`Import job not found: ${id}`);
     return (e.logs ?? []) as ImportJobLogEntry[];
+  }
+
+  /**
+   * Delete one job completely: stop its local server (if running), drop
+   * the DB row, and remove its package + work directories from disk.
+   * In-flight jobs are cancelled first (best-effort) so the worker bails
+   * out instead of recreating files. Disk removal is root-guarded: only
+   * paths strictly inside the storage/work roots are ever touched.
+   */
+  async remove(id: string): Promise<{
+    deleted: true;
+    clearedPackage: boolean;
+    clearedWork: boolean;
+    wasRunning: boolean;
+  }> {
+    const e = await this.jobs.findOne({ where: { id } });
+    if (!e) throw new NotFoundException(`Import job not found: ${id}`);
+
+    // Best-effort: mark in-flight rows cancelled so the worker bails out
+    // at its next checkpoint instead of re-uploading after we wipe files.
+    if (e.status !== 'completed' && e.status !== 'failed') {
+      e.status = 'cancelled';
+      e.currentStep = 'cancelled';
+      await this.jobs.save(e).catch(() => undefined);
+    }
+
+    // Stop a local server started from this job, if any.
+    let wasRunning = false;
+    const entry = this.running.get(id);
+    if (entry) {
+      wasRunning = true;
+      this.running.delete(id);
+      try {
+        entry.browser?.kill();
+      } catch {
+        /* best-effort */
+      }
+      try {
+        entry.child.kill();
+      } catch {
+        /* best-effort */
+      }
+    }
+
+    const pkgRoot = e.packageUrl ? path.resolve(e.packageUrl) : null;
+    await this.jobs.remove(e);
+    const clearedPackage = pkgRoot
+      ? await this.rmWithin(this.storageRoot(), pkgRoot)
+      : false;
+    const clearedWork = await this.rmWithin(
+      this.workRoot(),
+      path.join(this.workRoot(), id),
+    );
+    this.logger.log(
+      `Deleted job ${id}: package=${clearedPackage}, work=${clearedWork}`,
+    );
+    return { deleted: true, clearedPackage, clearedWork, wasRunning };
+  }
+
+  /**
+   * Remove `target` only when it sits strictly inside `root` (never the
+   * root itself, never anything outside it). Returns whether it removed.
+   */
+  private async rmWithin(root: string, target: string): Promise<boolean> {
+    try {
+      const r = path.resolve(root);
+      const t = path.resolve(target);
+      if (t === r || !t.startsWith(r + path.sep)) return false;
+      await fs.promises.rm(t, { recursive: true, force: true });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private workRoot(): string {
+    return path.resolve(process.env.IMPORT_WORK_DIR ?? './data/work');
+  }
+
+  private storageRoot(): string {
+    return path.resolve(process.env.STORAGE_LOCAL_ROOT ?? './data/packages');
   }
 
   /**

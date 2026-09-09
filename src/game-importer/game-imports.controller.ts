@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Param,
@@ -23,12 +24,12 @@ export class GameImportsController {
 
   @Post()
   create(@Body() dto: CreateImportDto) {
-    return this.service.create(dto.sourceUrl, dto.folderId);
+    return this.service.create(dto.sourceUrl, dto.folderId, dto.force);
   }
 
   @Post('batch')
   createBatch(@Body() dto: BatchImportDto) {
-    return this.service.createBatch(dto.sourceUrls, dto.folderId);
+    return this.service.createBatch(dto.sourceUrls, dto.folderId, dto.force);
   }
 
   @Post('discover')
@@ -70,6 +71,11 @@ export class GameImportsController {
   @Get(':id')
   get(@Param('id') id: string) {
     return this.service.get(id);
+  }
+
+  @Delete(':id')
+  remove(@Param('id') id: string) {
+    return this.service.remove(id);
   }
 
   @Post(':id/cancel')

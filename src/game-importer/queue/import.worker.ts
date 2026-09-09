@@ -85,10 +85,14 @@ export class ImportWorker {
   private async run(jobId: string): Promise<void> {
     const job = await this.jobs.findOne({ where: { id: jobId } });
     if (!job) throw new Error(`Job not found: ${jobId}`);
-    if (job.status === 'cancelled') return;
 
     const workRoot = process.env.IMPORT_WORK_DIR ?? './data/work';
     const workDir = path.join(path.resolve(workRoot), job.id);
+    if (job.status === 'cancelled') {
+      // Nothing ran here; drop the (likely empty) workspace anyway.
+      await this.cleanupWorkspace(workDir);
+      return;
+    }
     await fs.promises.mkdir(workDir, { recursive: true });
 
     // Structured diagnostics for this run (M3). Streamed live by engine
@@ -254,9 +258,16 @@ export class ImportWorker {
         `Import completed: ${packageUrl}`,
         'done',
       );
+      // The package now lives in storage; the temp workspace is dead
+      // weight on disk (often hundreds of MB). Drop it so data/work
+      // never grows unbounded over many imports.
+      await this.cleanupWorkspace(workDir);
     } catch (err) {
       const current = await this.jobs.findOne({ where: { id: jobId } });
-      if (current?.status === 'cancelled') return;
+      if (current?.status === 'cancelled') {
+        await this.cleanupWorkspace(workDir);
+        return;
+      }
       for (const d of diagnosticsOfError(err)) collect(d);
       const message = (err as Error).message ?? String(err);
       // Stable failure code: first error diagnostic wins, else the error's
@@ -282,6 +293,21 @@ export class ImportWorker {
       });
       await this.appendLog(jobId, 'error', message.slice(0, 1000), 'failed');
       this.logger.error(`Import ${jobId} failed: ${message}`);
+      await this.cleanupWorkspace(workDir);
+    }
+  }
+
+  /**
+   * Remove one job's temp workspace. Never fails the job: cleanup is a
+   * courtesy, not part of the pipeline result.
+   */
+  private async cleanupWorkspace(workDir: string): Promise<void> {
+    try {
+      await fs.promises.rm(workDir, { recursive: true, force: true });
+    } catch (err) {
+      this.logger.warn(
+        `Could not clean work dir ${workDir}: ${(err as Error).message}`,
+      );
     }
   }
 

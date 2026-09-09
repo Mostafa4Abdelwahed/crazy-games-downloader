@@ -65,6 +65,9 @@ describe('Game imports integration', () => {
     ['https://partner.example/games/demo-4']: Buffer.from(ENTRY_HTML),
     ['https://partner.example/games/demo-5']: Buffer.from(ENTRY_HTML),
     ['https://partner.example/games/demo-6']: Buffer.from(ENTRY_HTML),
+    ['https://partner.example/games/demo-7']: Buffer.from(ENTRY_HTML),
+    ['https://partner.example/games/demo-8']: Buffer.from(ENTRY_HTML),
+    ['https://partner.example/games/demo-9']: Buffer.from(ENTRY_HTML),
     ['https://partner.example/games/Build/test.loader.js']:
       Buffer.from(LOADER_JS),
     ['https://partner.example/games/Build/test.data']: Buffer.from(
@@ -617,6 +620,80 @@ describe('Game imports integration', () => {
           expect.objectContaining({ jobId: f1.body.id, folderName: null }),
         ]),
       );
+    });
+  });
+
+  describe('per-job delete + forced re-import', () => {
+    async function waitGone(p: string, timeoutMs = 5000): Promise<void> {
+      const start = Date.now();
+      for (;;) {
+        if (!fs.existsSync(p)) return;
+        if (Date.now() - start > timeoutMs) {
+          throw new Error(`Timed out waiting for ${p} to disappear`);
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
+
+    it('force starts a fresh run for an already-imported game', async () => {
+      const first = await request(app.getHttpServer())
+        .post('/game-imports')
+        .send({ sourceUrl: gameUrl(7) })
+        .expect(201);
+      await waitFor(first.body.id, ['completed', 'failed']);
+
+      const again = await request(app.getHttpServer())
+        .post('/game-imports')
+        .send({ sourceUrl: gameUrl(7) })
+        .expect(201);
+      expect(again.body.id).toBe(first.body.id);
+
+      const forced = await request(app.getHttpServer())
+        .post('/game-imports')
+        .send({ sourceUrl: gameUrl(7), force: true })
+        .expect(201);
+      expect(forced.body.id).not.toBe(first.body.id);
+      expect(forced.body.status).toBe('queued');
+      await waitFor(forced.body.id, ['completed', 'failed']);
+    });
+
+    it('DELETE removes the row and its package from disk', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/game-imports')
+        .send({ sourceUrl: gameUrl(8) })
+        .expect(201);
+      const done = await waitFor(created.body.id, ['completed', 'failed']);
+      expect(done.status).toBe('completed');
+      const pkgRoot = done.packageUrl as string;
+      expect(fs.existsSync(path.join(pkgRoot, 'index.html'))).toBe(true);
+
+      const del = await request(app.getHttpServer())
+        .delete(`/game-imports/${created.body.id}`)
+        .expect(200);
+      expect(del.body.deleted).toBe(true);
+      expect(del.body.clearedPackage).toBe(true);
+      // The package directory is really gone from disk.
+      expect(fs.existsSync(pkgRoot)).toBe(false);
+      // And the row is gone.
+      await request(app.getHttpServer())
+        .get(`/game-imports/${created.body.id}`)
+        .expect(404);
+    });
+
+    it('rejects DELETE for unknown jobs', async () => {
+      await request(app.getHttpServer())
+        .delete(`/game-imports/${randomUUID()}`)
+        .expect(404);
+    });
+
+    it('the worker drops the temp work dir when a job finishes', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/game-imports')
+        .send({ sourceUrl: gameUrl(9) })
+        .expect(201);
+      await waitFor(created.body.id, ['completed', 'failed']);
+      // Cleanup runs right after the terminal write; allow it to land.
+      await waitGone(path.join(workDir, created.body.id));
     });
   });
 });
