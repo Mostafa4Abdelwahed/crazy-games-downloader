@@ -281,3 +281,33 @@ describe('CrazyGamesParser extractNextDataGames', () => {
     ).toEqual([]);
   });
 });
+
+describe('CrazyGamesParser frame game entry (HTML5)', () => {
+  const parser = new CrazyGamesParser();
+
+  it('extracts the html5 loader name and game document URL', () => {
+    const frame =
+      '<script>var options = {"loader":"html5","loaderOptions":{"url":"https://crazy-chameleon.game-files.crazygames.com/crazy-chameleon/20/index.html"},"gameSlug":"crazy-chameleon"};</script>';
+    expect(parser.extractGameEntry(frame)).toEqual({
+      loader: 'html5',
+      gameEntryUrl:
+        'https://crazy-chameleon.game-files.crazygames.com/crazy-chameleon/20/index.html',
+    });
+  });
+
+  it('ignores Unity loader shells (no html5 url field)', () => {
+    const frame =
+      '<script>var options = {"loader":"unity6","loaderOptions":{"showProgress":true,"unityLoaderUrl":"https://files.crazygames.com/x/Build/x.loader.js","unityConfigOptions":{"codeUrl":"https://files.crazygames.com/x/Build/x.wasm"}}};</script>';
+    expect(parser.extractGameEntry(frame)).toEqual({
+      loader: 'unity6',
+      gameEntryUrl: undefined,
+    });
+  });
+
+  it('returns nothing when the frame has no options manifest', () => {
+    expect(parser.extractGameEntry('<html><body>game</body></html>')).toEqual({
+      loader: undefined,
+      gameEntryUrl: undefined,
+    });
+  });
+});

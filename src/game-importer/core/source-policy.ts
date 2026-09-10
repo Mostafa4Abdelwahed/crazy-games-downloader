@@ -23,6 +23,19 @@ export class SourcePolicyService {
     return (process.env.ALLOW_ANY_HTTPS ?? 'false').toLowerCase() === 'true';
   }
 
+  /**
+   * Check whether `host` matches an allowlist entry (exact match) or is a
+   * subdomain of an allowlisted root.  E.g. allowlisting
+   * `game-files.crazygames.com` implicitly authorizes
+   * `chameleon.game-files.crazygames.com` but NOT `evil.other.com`.
+   */
+  private isHostAllowed(host: string): boolean {
+    for (const allowed of this.allowedHosts()) {
+      if (host === allowed || host.endsWith('.' + allowed)) return true;
+    }
+    return false;
+  }
+
   isAllowed(sourceUrl: string): { allowed: boolean; reason?: string } {
     let parsed: URL;
     try {
@@ -37,7 +50,7 @@ export class SourcePolicyService {
       };
     }
     const host = parsed.hostname.toLowerCase();
-    if (this.allowedHosts().includes(host)) return { allowed: true };
+    if (this.isHostAllowed(host)) return { allowed: true };
     if (this.allowAnyHttps() && parsed.protocol === 'https:') {
       return { allowed: true };
     }

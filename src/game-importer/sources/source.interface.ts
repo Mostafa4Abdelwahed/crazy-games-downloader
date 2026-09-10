@@ -46,6 +46,12 @@ export interface ResolvedGameSource {
    * declare Unity build assets even when the frame HTML is a JS shell.
    */
   portalHtml?: string;
+  /**
+   * Absolute URL of the playable game document itself, when `entryUrl` is
+   * only a bootstrap shell (e.g. an HTML5 game's `loaderOptions.url`).
+   * Engine importers use this as the fetch base when present.
+   */
+  gameEntryUrl?: string;
   /** Absolute http(s) asset URLs exposed to the browser. Hints only. */
   assetUrls: string[];
   /**

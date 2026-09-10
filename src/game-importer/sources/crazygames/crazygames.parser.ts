@@ -170,6 +170,35 @@ export class CrazyGamesParser {
   }
 
   /**
+   * Extract the game entry URL and loader type from a CrazyGames game
+   * frame's inline `var options = {...}` delivery manifest.  For HTML5
+   * games this yields the actual game document URL; Unity games use
+   * `unityLoaderUrl` which is handled separately by the delivery config.
+   */
+  extractGameEntry(frameHtml: string): {
+    loader?: string;
+    gameEntryUrl?: string;
+  } {
+    const loaderMatch = frameHtml
+      .slice(0, 2_000_000)
+      .match(/["']loader["']\s*:\s*["']([a-zA-Z0-9_.-]{1,40})["']/);
+    const loader = loaderMatch?.[1] ?? undefined;
+    const block = frameHtml
+      .slice(0, 2_000_000)
+      .match(/["']loaderOptions["']\s*:\s*\{([^}]*)\}/);
+    let gameEntryUrl: string | undefined;
+    if (block) {
+      const urlMatch = block[1].match(
+        /["']url["']\s*:\s*["']([^"']{1,2000})["']/,
+      );
+      if (urlMatch) {
+        gameEntryUrl = normalizeDeliveryUrl(urlMatch[1]) ?? undefined;
+      }
+    }
+    return { loader, gameEntryUrl };
+  }
+
+  /**
    * Discover game links from a listing page (category/tag/home). Anchors
    * pointing at `/game/{slug}` are canonicalized and de-duplicated; the
    * title comes from the link's image alt or text, the thumbnail from the

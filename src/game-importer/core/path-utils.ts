@@ -78,6 +78,8 @@ export function contentTypeForFile(filePath: string): string {
       return 'text/html';
     case 'js':
       return 'text/javascript';
+    case 'mjs':
+      return 'text/javascript';
     case 'wasm':
       return 'application/wasm';
     case 'data':
@@ -91,10 +93,34 @@ export function contentTypeForFile(filePath: string): string {
     case 'jpg':
     case 'jpeg':
       return 'image/jpeg';
+    case 'gif':
+      return 'image/gif';
+    case 'webp':
+      return 'image/webp';
+    case 'svg':
+      return 'image/svg+xml';
+    case 'ico':
+      return 'image/x-icon';
+    case 'woff':
+      return 'font/woff';
+    case 'woff2':
+      return 'font/woff2';
+    case 'ttf':
+      return 'font/ttf';
+    case 'otf':
+      return 'font/otf';
     case 'mp3':
       return 'audio/mpeg';
     case 'ogg':
       return 'audio/ogg';
+    case 'wav':
+      return 'audio/wav';
+    case 'mp4':
+      return 'video/mp4';
+    case 'webm':
+      return 'video/webm';
+    case 'txt':
+      return 'text/plain';
     case 'unityweb':
       return 'application/octet-stream';
     default:

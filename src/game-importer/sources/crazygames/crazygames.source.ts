@@ -217,6 +217,7 @@ export class CrazyGamesSourceAdapter implements GameSourceAdapter {
       if (!assetUrls.includes(u)) assetUrls.push(u);
     }
     const unityBuild = toUnityBuildRoles(delivery?.loaderUrl, delivery);
+    const frameEntry = this.parser.extractGameEntry(frameHtml);
 
     return {
       source: this.name,
@@ -227,6 +228,9 @@ export class CrazyGamesSourceAdapter implements GameSourceAdapter {
       portalHtml: html,
       assetUrls,
       ...(unityBuild ? { unityBuild } : {}),
+      ...(frameEntry?.gameEntryUrl
+        ? { gameEntryUrl: frameEntry.gameEntryUrl }
+        : {}),
       ...(metadata ? { metadata } : {}),
     };
   }
