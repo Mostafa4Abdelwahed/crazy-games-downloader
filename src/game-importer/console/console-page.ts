@@ -698,14 +698,9 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '    var rb = document.getElementById("reimportBtn");\n' +
     '    if (rb) rb.addEventListener("click", function () {\n' +
     '      rb.disabled = true;\n' +
-    '      var body = { sourceUrl: j.sourceUrl, force: true };\n' +
-    '      var folderScope = j.folderId ? j.folderId : (FOLDER_ID === "none" ? null : FOLDER_ID);\n' +
-    '      if (folderScope) body.folderId = folderScope;\n' +
-    '      api("/game-imports", {\n' +
-    '        method: "POST",\n' +
-    '        headers: { "Content-Type": "application/json" },\n' +
-    '        body: JSON.stringify(body)\n' +
-    '      }).then(function (nj) { selectJob(nj.id); }, function (e) { rb.disabled = false; alert(e.message); });\n' +
+    '      api("/game-imports/" + encodeURIComponent(j.id) + "/reimport", { method: "POST" }).then(function (nj) {\n' +
+    '        selectJob(nj.id);\n' +
+    '      }, function (e) { rb.disabled = false; alert(e.message); });\n' +
     '    });\n' +
     '    var db = document.getElementById("deleteJobBtn");\n' +
     '    if (db) db.addEventListener("click", function () {\n' +

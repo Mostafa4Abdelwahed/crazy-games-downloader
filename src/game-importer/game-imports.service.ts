@@ -832,7 +832,10 @@ export class GameImportsService implements OnModuleInit {
    * PLACE (same id, same seq, same folder). Unlike force-create, this
    * never adds rows — folder totals stay stable across retries.
    */
-  private async resetForRetry(e: ImportJobEntity): Promise<ImportJob> {
+  private async resetForRetry(
+    e: ImportJobEntity,
+    via = 'Retried by user — queued again',
+  ): Promise<ImportJob> {
     e.status = 'queued';
     e.progress = 0;
     e.downloadedFiles = 0;
@@ -849,13 +852,36 @@ export class GameImportsService implements OnModuleInit {
       {
         at: new Date().toISOString(),
         level: 'info',
-        message: 'Retried by user — queued again',
+        message: via,
         step: 'queued',
       },
     ];
     await this.jobs.save(e);
     await this.queue.enqueue(e.id);
     return toJob(e);
+  }
+
+  /**
+   * Re-import one finished game IN PLACE (same row, same seq, same
+   * folder) instead of stacking a duplicate row. The previous package +
+   * work dirs are wiped first so the fresh run starts clean (storage
+   * upload merges into the job dir — stale files would otherwise
+   * linger). Only terminal jobs (completed/failed/cancelled); resetting
+   * a running job would corrupt it.
+   */
+  async reimport(id: string): Promise<ImportJob> {
+    const e = await this.jobs.findOne({ where: { id } });
+    if (!e) throw new NotFoundException(`Import job not found: ${id}`);
+    if (!REVIEWABLE_STATUSES.has(e.status)) {
+      throw new BadRequestException(
+        `Cannot re-import job in status ${e.status} — it is still running`,
+      );
+    }
+    if (e.packageUrl) {
+      await this.rmWithin(this.storageRoot(), path.resolve(e.packageUrl));
+    }
+    await this.rmWithin(this.workRoot(), path.join(this.workRoot(), id));
+    return this.resetForRetry(e, 'Re-imported by user — same job queued again');
   }
 
   /**

@@ -19,11 +19,14 @@ describe('management console page', () => {
     expect(html).toContain('reimportBtn');
     expect(html).toContain('Start imports');
     expect(html).toContain('One game URL per line');
-    // Single create endpoint stays available for the re-import button.
+    // Single create endpoint stays available for the start form.
     expect(html).toContain('"/game-imports"');
-    // Re-import forces a fresh run past the global dedup; per-job delete
-    // asks for confirmation then calls DELETE on the job.
-    expect(html).toContain('force: true');
+    // Re-import re-runs the SAME job in place (no duplicate rows); per-job
+    // delete asks for confirmation then calls DELETE on the job.
+    expect(html).toContain(
+      '"/game-imports/" + encodeURIComponent(j.id) + "/reimport"',
+    );
+    expect(html).not.toContain('force: true');
     expect(html).toContain('deleteJobBtn');
     expect(html).toContain('window.confirm');
     expect(html).toContain('method: "DELETE"');

@@ -47,6 +47,12 @@ export class GameImportsController {
     return this.service.retryJobs(dto.jobIds);
   }
 
+  @Post(':id/reimport')
+  @HttpCode(200)
+  reimport(@Param('id') id: string) {
+    return this.service.reimport(id);
+  }
+
   @Post('discover')
   @HttpCode(200)
   discover(@Body() dto: DiscoverImportDto) {

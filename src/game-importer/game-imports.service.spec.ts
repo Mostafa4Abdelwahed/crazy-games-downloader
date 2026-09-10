@@ -590,6 +590,90 @@ describe('GameImportsService list pagination', () => {
   });
 });
 
+describe('GameImportsService reimport (same job, in place)', () => {
+  const OLD_ENV = { ...process.env };
+  let workRoot: string;
+  let storeRoot: string;
+
+  async function exists(p: string): Promise<boolean> {
+    try {
+      await stat(p);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  beforeEach(async () => {
+    workRoot = await mkdtemp(path.join(os.tmpdir(), 're-work-'));
+    storeRoot = await mkdtemp(path.join(os.tmpdir(), 're-store-'));
+    process.env.IMPORT_WORK_DIR = workRoot;
+    process.env.STORAGE_LOCAL_ROOT = storeRoot;
+  });
+
+  afterEach(async () => {
+    process.env = { ...OLD_ENV };
+    await rm(workRoot, { recursive: true, force: true });
+    await rm(storeRoot, { recursive: true, force: true });
+  });
+
+  it('re-queues a completed job in place and wipes its old package', async () => {
+    const pkgDir = path.join(storeRoot, 'job-done');
+    await mkdir(pkgDir, { recursive: true });
+    await writeFile(path.join(pkgDir, 'index.html'), 'old');
+    await mkdir(path.join(workRoot, 'job-done'), { recursive: true });
+    const entity = toEntity({
+      id: 'job-done',
+      seq: 5,
+      status: 'completed',
+      reviewStatus: 'approved',
+      folderId: 'f-1',
+      packageUrl: pkgDir,
+    });
+    const { service, queue, repo } = makeService({
+      findOne: jest.fn(async () => entity),
+    });
+    const res = await service.reimport('job-done');
+    // Same row: id, seq and folder preserved — no duplicate job.
+    expect(res.id).toBe('job-done');
+    expect(res.seq).toBe(5);
+    expect(res.status).toBe('queued');
+    expect(res.folderId).toBe('f-1');
+    expect(res.packageUrl).toBeNull();
+    expect(res.reviewStatus).toBe('pending');
+    expect(repo.create).not.toHaveBeenCalled();
+    expect(queue.enqueue).toHaveBeenCalledWith('job-done');
+    // Stale package + work dirs wiped so the fresh run starts clean.
+    expect(await exists(pkgDir)).toBe(false);
+    expect(await exists(path.join(workRoot, 'job-done'))).toBe(false);
+  });
+
+  it('reimports failed jobs that have no package yet', async () => {
+    const entity = toEntity({ id: 'job-bad', status: 'failed' });
+    const { service, queue } = makeService({
+      findOne: jest.fn(async () => entity),
+    });
+    const res = await service.reimport('job-bad');
+    expect(res.status).toBe('queued');
+    expect(queue.enqueue).toHaveBeenCalledWith('job-bad');
+  });
+
+  it('refuses running jobs and unknown ids', async () => {
+    const { service } = makeService({
+      findOne: jest.fn(async ({ where }: never) => {
+        const w = where as { id: string };
+        if (w.id === 'running')
+          return toEntity({ id: 'running', status: 'downloading' });
+        return null;
+      }),
+    });
+    await expect(service.reimport('running')).rejects.toThrow('still running');
+    await expect(service.reimport('missing')).rejects.toThrow(
+      'Import job not found',
+    );
+  });
+});
+
 describe('GameImportsService manual review', () => {
   it('approves a completed game and logs the verdict', async () => {
     const entity = toEntity({ id: 'done', status: 'completed' });
