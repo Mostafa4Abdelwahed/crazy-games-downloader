@@ -397,6 +397,28 @@ describe('management console page', () => {
     expect(html).toContain('id=\\"cancelBtn\\"');
   });
 
+  it('lets the admin approve or reject finished games from the details panel', () => {
+    const html = renderConsolePage();
+    // Review verdict badge next to the pipeline status everywhere.
+    expect(html).toContain('function reviewBadge(r)');
+    expect(html).toContain('reviewBadge(j.reviewStatus)');
+    expect(html).toContain('.pill.approved');
+    expect(html).toContain('.pill.rejected');
+    // Approve/Reject buttons on terminal jobs only, posting the verdict.
+    expect(html).toContain('id=\\"approveBtn\\"');
+    expect(html).toContain('id=\\"rejectBtn\\"');
+    expect(html).toContain(
+      '"/game-imports/" + encodeURIComponent(id) + "/review"',
+    );
+    expect(html).toContain('body: JSON.stringify({ status: verdict })');
+    // Review filter dropdown wired into the listing query.
+    expect(html).toContain('id="filterReview"');
+    expect(html).toContain('<option value="approved">Approved</option>');
+    expect(html).toContain(
+      'if (jobReviewFilter) q += "&review=" + encodeURIComponent(jobReviewFilter)',
+    );
+  });
+
   it('adapts to small screens without horizontal breakage', () => {
     const html = renderConsolePage();
     // Updated column hides on narrow screens; search goes full-width.

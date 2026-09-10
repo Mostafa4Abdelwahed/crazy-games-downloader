@@ -6,7 +6,7 @@ import {
   PrimaryColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { ImportState } from '../core/types';
+import { ImportState, ReviewStatus } from '../core/types';
 
 @Entity('import_jobs')
 export class ImportJobEntity {
@@ -36,6 +36,14 @@ export class ImportJobEntity {
 
   @Column('text', { default: 'queued' })
   status!: ImportState;
+
+  /**
+   * Manual admin verdict on the imported game (`pending` until reviewed).
+   * Written only by the explicit review endpoint — the import pipeline
+   * never touches it, so it survives retries and status transitions.
+   */
+  @Column('text', { default: 'pending' })
+  reviewStatus!: ReviewStatus;
 
   @Column('float', { default: 0 })
   progress!: number;

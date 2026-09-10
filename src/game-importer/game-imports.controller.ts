@@ -13,6 +13,7 @@ import { BatchImportDto } from './dto/batch-import.dto';
 import { DiscoverImportDto } from './dto/discover-import.dto';
 import { FolderScopeDto } from './dto/folder.dto';
 import { RetryJobsDto } from './dto/retry-jobs.dto';
+import { ReviewJobDto } from './dto/review-job.dto';
 import { GameImportsService } from './game-imports.service';
 
 /**
@@ -61,6 +62,7 @@ export class GameImportsController {
     @Query('sort') sort?: string,
     @Query('dir') dir?: string,
     @Query('q') q?: string,
+    @Query('review') review?: string,
   ) {
     const p = page === undefined ? 1 : Number(page);
     const n = limit === undefined ? 50 : Number(limit);
@@ -81,6 +83,7 @@ export class GameImportsController {
       sortKey,
       dir === 'ASC' || dir === 'asc' ? 'ASC' : 'DESC',
       q || null,
+      review || null,
     );
   }
 
@@ -98,6 +101,12 @@ export class GameImportsController {
   @HttpCode(200)
   cancel(@Param('id') id: string) {
     return this.service.cancel(id);
+  }
+
+  @Post(':id/review')
+  @HttpCode(200)
+  review(@Param('id') id: string, @Body() dto: ReviewJobDto) {
+    return this.service.setReviewStatus(id, dto.status);
   }
 
   @Get(':id/logs')

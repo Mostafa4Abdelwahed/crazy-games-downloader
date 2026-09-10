@@ -169,6 +169,9 @@ export function renderConsolePage(folderId: string = 'none'): string {
     'tbody tr.job.sel td:first-child{box-shadow:inset 3px 0 0 var(--brand)}\n' +
     'td.src{max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}\n' +
     '.pill{display:inline-block;padding:3px 12px;border-radius:999px;font-size:.74rem;font-weight:800;letter-spacing:.03em;white-space:nowrap;border:1px solid transparent}\n' +
+    '.pill.pending{background:#3a3f4a;color:#cfd3dc}\n' +
+    '.pill.approved{background:#14532d;color:#bbf7d0}\n' +
+    '.pill.rejected{background:#5b1a1a;color:#fecaca}\n' +
     '.queued,.detecting,.resolving,.downloading,.extracting,.validating,.uploading{background:var(--queued-bg);color:var(--queued-fg);border-color:var(--queued-bd)}\n' +
     '.completed{background:var(--ok-bg);color:var(--ok-fg);border-color:var(--ok-bd)}\n' +
     '.failed{background:var(--err-bg);color:var(--err-fg);border-color:var(--err-bd)}\n' +
@@ -316,6 +319,12 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '<option value="cancelled">Cancelled</option>\n' +
     '</optgroup>\n' +
     '</select>\n' +
+    '<select id="filterReview" class="field filter-sel" title="Filter by manual review">\n' +
+    '<option value="">All reviews</option>\n' +
+    '<option value="pending">Pending review</option>\n' +
+    '<option value="approved">Approved</option>\n' +
+    '<option value="rejected">Rejected</option>\n' +
+    '</select>\n' +
     '<select id="sortKey" class="field filter-sel" title="Sort by">\n' +
     '<option value="updatedAt" selected>Recently updated</option>\n' +
     '<option value="seq">Job number</option>\n' +
@@ -385,6 +394,7 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '  var jobTotal = 0;\n' +
     '  var jobTotalPages = 1;\n' +
     '  var jobStatusFilter = "";\n' +
+    '  var jobReviewFilter = "";\n' +
     '  var jobSortKey = "updatedAt";\n' +
     '  var jobSortDir = "DESC";\n' +
     '  var jobSearchQ = "";\n' +
@@ -433,10 +443,15 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '      return r.json();\n' +
     '    });\n' +
     '  }\n' +
+    '  function reviewBadge(r) {\n' +
+    '    if (!r || r === "pending") return "";\n' +
+    '    return " <span class=\\"pill " + esc(r) + "\\">" + esc(r) + "</span>";\n' +
+    '  }\n' +
     '  function jobsQuery() {\n' +
     '    var q = "?page=" + jobPage + "&limit=" + jobPageSize + "&folderId=" + encodeURIComponent(FOLDER_ID) +\n' +
     '      "&sort=" + encodeURIComponent(jobSortKey) + "&dir=" + jobSortDir;\n' +
     '    if (jobStatusFilter) q += "&status=" + encodeURIComponent(jobStatusFilter);\n' +
+    '    if (jobReviewFilter) q += "&review=" + encodeURIComponent(jobReviewFilter);\n' +
     '    if (jobSearchQ) q += "&q=" + encodeURIComponent(jobSearchQ);\n' +
     '    return q;\n' +
     '  }\n' +
@@ -456,7 +471,7 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '          "<td><input type=\\"checkbox\\" class=\\"rowSel\\" data-id=\\"" + esc(j.id) + "\\"" + (selected[j.id] ? " checked" : "") + " aria-label=\\"Select job\\"></td>" +\n' +
     '          "<td><code>#" + (j.seq != null ? esc(j.seq) : "?") + "</code></td>" +\n' +
     '          "<td class=\\"src\\" title=\\"" + esc(j.sourceUrl) + "\\">" + esc(j.sourceUrl) + "</td>" +\n' +
-    '          "<td><span class=\\"pill " + esc(j.status) + "\\">" + esc(j.status) + "</span></td>" +\n' +
+    '          "<td><span class=\\"pill " + esc(j.status) + "\\">" + esc(j.status) + "</span>" + reviewBadge(j.reviewStatus) + "</td>" +\n' +
     '          "<td>" + esc(j.progress) + "%</td>" +\n' +
     '          "<td class=\\"muted\\">" + esc(j.updatedAt) + "</td></tr>";\n' +
     '      });\n' +
@@ -620,11 +635,22 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '      return d.toLocaleString();\n' +
     '    } catch (e) { return String(iso || "—"); }\n' +
     '  }\n' +
+    '  function reviewJob(id, verdict, btn) {\n' +
+    '    if (btn) btn.disabled = true;\n' +
+    '    api("/game-imports/" + encodeURIComponent(id) + "/review", {\n' +
+    '      method: "POST",\n' +
+    '      headers: { "Content-Type": "application/json" },\n' +
+    '      body: JSON.stringify({ status: verdict })\n' +
+    '    }).then(refreshSelected, function (e) {\n' +
+    '      if (btn) btn.disabled = false;\n' +
+    '      alert(e.message);\n' +
+    '    });\n' +
+    '  }\n' +
     '  function renderDetail(j, logs) {\n' +
     '    var el = document.getElementById("detail");\n' +
     '    var html = "<div class=\\"d-head\\">" +\n' +
     '      "<div class=\\"d-title\\">" + esc(gameName(j.sourceUrl)) + " <code>#" + (j.seq != null ? esc(j.seq) : "?") + "</code></div>" +\n' +
-    '      "<span class=\\"pill " + esc(j.status) + "\\">" + esc(j.status) + "</span></div>" +\n' +
+    '      "<span class=\\"pill " + esc(j.status) + "\\">" + esc(j.status) + "</span>" + reviewBadge(j.reviewStatus) + "</div>" +\n' +
     '      "<div class=\\"d-url\\" title=\\"" + esc(j.sourceUrl) + "\\">" + esc(j.sourceUrl) + "</div>" +\n' +
     '      "<div class=\\"d-progress\\"><div class=\\"bar\\"><i style=\\"width:" + esc(j.progress) + "%\\"></i></div><span>" + esc(j.progress) + "%</span></div>" +\n' +
     '      "<div class=\\"d-stats\\">" +\n' +
@@ -644,6 +670,9 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '      html += "<div class=\\"d-actions\\">" +\n' +
     '        "<button id=\\"reimportBtn\\" class=\\"btn ghost\\"><svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><path d=\\"M23 4v6h-6\\"/><path d=\\"M20.49 15a9 9 0 1 1-2.12-9.36L23 10\\"/></svg>Re-import</button>" +\n' +
     '        "<button id=\\"deleteJobBtn\\" class=\\"btn danger\\"><svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><polyline points=\\"3 6 5 6 21 6\\"/><path d=\\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\\"/></svg>Delete</button></div>";\n' +
+    '      html += "<div class=\\"d-actions\\"><span class=\\"muted\\">Manual review:</span>" +\n' +
+    '        "<button id=\\"approveBtn\\" class=\\"btn ghost\\">Approve</button>" +\n' +
+    '        "<button id=\\"rejectBtn\\" class=\\"btn danger\\">Reject</button></div>";\n' +
     '    }\n' +
     '    if (["queued", "detecting", "resolving", "downloading", "extracting", "validating", "uploading"].indexOf(j.status) >= 0) {\n' +
     '      html += "<div class=\\"d-actions\\"><button id=\\"cancelBtn\\" class=\\"btn light\\">Cancel job</button></div>";\n' +
@@ -696,6 +725,10 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '        alert(e.message);\n' +
     '      });\n' +
     '    });\n' +
+    '    var ab = document.getElementById("approveBtn");\n' +
+    '    if (ab) ab.addEventListener("click", function () { reviewJob(j.id, "approved", ab); });\n' +
+    '    var rjBtn = document.getElementById("rejectBtn");\n' +
+    '    if (rjBtn) rjBtn.addEventListener("click", function () { reviewJob(j.id, "rejected", rjBtn); });\n' +
     '  }\n' +
     '  var TERMINAL = ["completed", "failed", "cancelled"];\n' +
     '  function refreshSelected() {\n' +
@@ -875,6 +908,12 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '  var fStatus = document.getElementById("filterStatus");\n' +
     '  if (fStatus) fStatus.addEventListener("change", function () {\n' +
     '    jobStatusFilter = fStatus.value;\n' +
+    '    jobPage = 1;\n' +
+    '    loadJobs();\n' +
+    '  });\n' +
+    '  var fReview = document.getElementById("filterReview");\n' +
+    '  if (fReview) fReview.addEventListener("change", function () {\n' +
+    '    jobReviewFilter = fReview.value;\n' +
     '    jobPage = 1;\n' +
     '    loadJobs();\n' +
     '  });\n' +

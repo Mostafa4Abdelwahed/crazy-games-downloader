@@ -467,6 +467,7 @@ describe('GameImportsService list pagination', () => {
       seq: 7,
       sourceUrl: 'https://www.crazygames.com/game/foo',
       status: 'queued',
+      reviewStatus: 'pending',
       progress: 0,
       updatedAt: expect.any(String),
       folderId: null,
@@ -550,6 +551,94 @@ describe('GameImportsService list pagination', () => {
       skip: 0,
       take: 10,
     });
+  });
+
+  it('filters by manual review verdict', async () => {
+    const { service, repo } = makeService();
+    await service.list(
+      1,
+      10,
+      null,
+      null,
+      'updatedAt',
+      'DESC',
+      null,
+      'approved',
+    );
+    expect(repo.findAndCount).toHaveBeenCalledWith({
+      where: { reviewStatus: 'approved' },
+      order: { updatedAt: 'DESC' },
+      skip: 0,
+      take: 10,
+    });
+    // Invalid review filters are ignored rather than 500-ing.
+    await service.list(
+      1,
+      10,
+      null,
+      null,
+      'updatedAt',
+      'DESC',
+      null,
+      'nonsense',
+    );
+    expect(repo.findAndCount).toHaveBeenLastCalledWith({
+      order: { updatedAt: 'DESC' },
+      skip: 0,
+      take: 10,
+    });
+  });
+});
+
+describe('GameImportsService manual review', () => {
+  it('approves a completed game and logs the verdict', async () => {
+    const entity = toEntity({ id: 'done', status: 'completed' });
+    const { service, repo } = makeService({
+      findOne: jest.fn(async () => entity),
+    });
+    const res = await service.setReviewStatus('done', 'approved');
+    expect(res.reviewStatus).toBe('approved');
+    // Pipeline status untouched — verdict is a separate label.
+    expect(res.status).toBe('completed');
+    expect(repo.save).toHaveBeenCalledWith(entity);
+    expect((entity as { reviewStatus?: string }).reviewStatus).toBe('approved');
+    expect(entity.logs?.at(-1)?.message).toContain('approved');
+  });
+
+  it('rejects a failed game and allows re-reviewing', async () => {
+    const entity = toEntity({
+      id: 'bad',
+      status: 'failed',
+      reviewStatus: 'approved',
+    });
+    const { service } = makeService({
+      findOne: jest.fn(async () => entity),
+    });
+    const res = await service.setReviewStatus('bad', 'rejected');
+    expect(res.reviewStatus).toBe('rejected');
+  });
+
+  it('refuses invalid verdicts, pending, unknown jobs and running jobs', async () => {
+    const { service } = makeService({
+      findOne: jest.fn(async ({ where }: never) => {
+        const w = where as { id: string };
+        if (w.id === 'running')
+          return toEntity({ id: 'running', status: 'downloading' });
+        return null;
+      }),
+    });
+    await expect(service.setReviewStatus('done', 'maybe')).rejects.toThrow(
+      'Invalid review status',
+    );
+    await expect(service.setReviewStatus('done', 'pending')).rejects.toThrow(
+      'Invalid review status',
+    );
+    await expect(
+      service.setReviewStatus('missing', 'approved'),
+    ).rejects.toThrow('Import job not found');
+    await expect(
+      service.setReviewStatus('running', 'approved'),
+    ).rejects.toThrow('Cannot review job in status downloading');
   });
 });
 
@@ -822,6 +911,8 @@ describe('GameImportsService retryFailed', () => {
     expect(repo.create).not.toHaveBeenCalled();
     expect(rows[0].error).toBeNull();
     expect(rows[0].progress).toBe(0);
+    // A retried run needs a fresh human verdict.
+    expect((rows[0] as { reviewStatus?: string }).reviewStatus).toBe('pending');
   });
 
   it('returns zero when nothing failed', async () => {

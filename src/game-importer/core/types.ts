@@ -15,6 +15,14 @@ export type ImportState =
   | 'failed'
   | 'cancelled';
 
+/**
+ * Manual admin verdict on an imported game, independent of the pipeline
+ * `ImportState`. After reviewing a finished game the admin marks it
+ * `approved` (working) or `rejected` (broken); untouched jobs stay
+ * `pending`. Never written by the import pipeline itself.
+ */
+export type ReviewStatus = 'pending' | 'approved' | 'rejected';
+
 export interface DetectionSignal {
   name: string;
   weight: number;
@@ -172,6 +180,8 @@ export interface ImportJob {
   seq?: number | null;
   sourceUrl: string;
   status: ImportState;
+  /** Manual admin verdict; `pending` until the admin reviews the game. */
+  reviewStatus: ReviewStatus;
   progress: number;
   detectedEngine?: string | null;
   downloadedFiles: number;

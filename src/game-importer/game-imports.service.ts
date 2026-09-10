@@ -18,7 +18,12 @@ import { ImportJobEntity } from './entities/import-job.entity';
 import { RunServerEntity } from './entities/run-server.entity';
 import { SourcePolicyService } from './core/source-policy';
 import { ImportQueueService } from './queue/import.queue';
-import { ImportJob, ImportJobLogEntry, ImportState } from './core/types';
+import {
+  ImportJob,
+  ImportJobLogEntry,
+  ImportState,
+  ReviewStatus,
+} from './core/types';
 import { DiagnosticLevel, ImportDiagnostic } from './core/diagnostics';
 import { SourceRegistry } from './sources/source-registry';
 import { dirUsage } from './storage/disk-usage';
@@ -43,6 +48,20 @@ const VALID_STATUSES = new Set<string>([
   'extracting',
   'validating',
   'uploading',
+  'completed',
+  'failed',
+  'cancelled',
+]);
+
+/** Valid manual review verdicts (admin review endpoint + `review` filter). */
+const VALID_REVIEW_STATUSES: ReadonlySet<string> = new Set([
+  'pending',
+  'approved',
+  'rejected',
+]);
+
+/** Pipeline states a job must be in before the admin can review it. */
+const REVIEWABLE_STATUSES: ReadonlySet<string> = new Set([
   'completed',
   'failed',
   'cancelled',
@@ -97,6 +116,8 @@ export interface ImportJobSummary {
   seq: number | null;
   sourceUrl: string;
   status: ImportState;
+  /** Manual admin verdict (`pending` until reviewed). */
+  reviewStatus: ReviewStatus;
   progress: number;
   updatedAt: string;
   /** Owning folder (null = ungrouped); needed for folder-preserving retry. */
@@ -345,6 +366,7 @@ function toJob(e: ImportJobEntity): ImportJob {
     seq: e.seq ?? null,
     sourceUrl: e.sourceUrl,
     status: e.status,
+    reviewStatus: e.reviewStatus ?? 'pending',
     progress: e.progress,
     detectedEngine: e.detectedEngine,
     downloadedFiles: e.downloadedFiles,
@@ -374,6 +396,7 @@ function toJobSummary(e: ImportJobEntity): ImportJobSummary {
     seq: e.seq ?? null,
     sourceUrl: e.sourceUrl,
     status: e.status,
+    reviewStatus: e.reviewStatus ?? 'pending',
     progress: e.progress,
     updatedAt: e.updatedAt?.toISOString?.() ?? new Date().toISOString(),
     folderId: e.folderId ?? null,
@@ -764,6 +787,7 @@ export class GameImportsService implements OnModuleInit {
     sort: 'seq' | 'updatedAt' | 'status' | 'progress' = 'updatedAt',
     dir: 'ASC' | 'DESC' = 'DESC',
     q?: string | null,
+    review?: string | null,
   ): Promise<ImportJobPage> {
     const pageSize = Math.min(Math.max(limit, 1), 200);
     const cur = Math.max(page, 1);
@@ -775,6 +799,9 @@ export class GameImportsService implements OnModuleInit {
     }
     if (status && VALID_STATUSES.has(status)) {
       where.status = status as ImportState;
+    }
+    if (review && VALID_REVIEW_STATUSES.has(review)) {
+      where.reviewStatus = review as ReviewStatus;
     }
     const needle = (q ?? '').trim().slice(0, 200);
     if (needle) {
@@ -814,6 +841,9 @@ export class GameImportsService implements OnModuleInit {
     e.error = null;
     e.errorCode = null;
     e.packageUrl = null;
+    // Fresh run, fresh verdict: the old manual review judged the previous
+    // package, so it resets to pending.
+    e.reviewStatus = 'pending';
     e.logs = [
       ...(e.logs ?? []),
       {
@@ -963,6 +993,40 @@ export class GameImportsService implements OnModuleInit {
         level: 'info',
         message: 'Import cancelled by user',
         step: 'cancelled',
+      },
+    ];
+    await this.jobs.save(e);
+    return toJob(e);
+  }
+
+  /**
+   * Record the admin's manual verdict on a finished game (`approved` =
+   * working, `rejected` = broken). Only terminal jobs can be reviewed —
+   * there is no game to judge while the pipeline is still running — but
+   * the verdict itself never touches the pipeline `status`, so it
+   * survives retries and can be changed by reviewing again.
+   */
+  async setReviewStatus(id: string, status: string): Promise<ImportJob> {
+    if (!VALID_REVIEW_STATUSES.has(status) || status === 'pending') {
+      throw new BadRequestException(
+        `Invalid review status: ${status} (expected 'approved' or 'rejected')`,
+      );
+    }
+    const e = await this.jobs.findOne({ where: { id } });
+    if (!e) throw new NotFoundException(`Import job not found: ${id}`);
+    if (!REVIEWABLE_STATUSES.has(e.status)) {
+      throw new BadRequestException(
+        `Cannot review job in status ${e.status} — review finished games only`,
+      );
+    }
+    e.reviewStatus = status as ReviewStatus;
+    e.logs = [
+      ...(e.logs ?? []),
+      {
+        at: new Date().toISOString(),
+        level: 'info',
+        message: `Manually reviewed by admin: ${status}`,
+        step: e.currentStep ?? e.status,
       },
     ];
     await this.jobs.save(e);
