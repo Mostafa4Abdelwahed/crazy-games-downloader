@@ -45,9 +45,25 @@ describe('settings page', () => {
 
   it('links back to the console and marks itself active', () => {
     const html = renderSettingsPage();
-    expect(html).toContain('href="/console"');
     expect(html).toContain('href="/console/settings"');
+    expect(html).toContain('href="/"');
+    // No generic Console link: consoles are per-folder, reached from Home.
+    expect(html).not.toContain('href="/console"');
     expect(html).toContain('class="active"');
+  });
+
+  it('hosts the library backup import/export card', () => {
+    const html = renderSettingsPage();
+    expect(html).toContain('Library backup');
+    expect(html).toContain('id="exportBtn"');
+    expect(html).toContain('id="importBtn"');
+    expect(html).toContain('id="importFile"');
+    expect(html).toContain('id="backupStatus"');
+    expect(html).toContain('id="backupError"');
+    expect(html).toContain('api("/folders/export")');
+    expect(html).toContain('api("/folders/import"');
+    expect(html).toContain('That file is not valid JSON.');
+    expect(html).toContain('already existed, skipped');
   });
 
   it('shows on-disk usage next to the package and work counts', () => {

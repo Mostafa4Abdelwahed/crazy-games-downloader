@@ -163,7 +163,7 @@ export function renderSettingsPage(): string {
     '<p>Project runtime settings (environment-driven) and maintenance actions.</p>\n' +
     '</div>\n' +
     '<nav class="nav-tabs">\n' +
-    '<a href="/console"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>Console</a>\n' +
+    '<a href="/"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>Folders</a>\n' +
     '<a href="/console/settings" class="active"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Settings</a>\n' +
     '</nav>\n' +
     '<button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle color theme" title="Toggle light/dark">\n' +
@@ -207,6 +207,17 @@ export function renderSettingsPage(): string {
     '<section class="card">\n' +
     '<h2 class="section-title">Runtime &amp; Unity</h2>\n' +
     '<div class="kv" id="kvRuntime"></div>\n' +
+    '</section>\n' +
+    '<section class="card">\n' +
+    '<h2 class="section-title">Library backup</h2>\n' +
+    '<p class="muted">Export the whole library (folders + game URLs, no package files) as JSON, or restore one. Restoring never duplicates: games that already exist are skipped.</p>\n' +
+    '<div class="row" style="margin-top:0">\n' +
+    '<button type="button" id="exportBtn" class="btn ghost"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export backup (JSON)</button>\n' +
+    '<button type="button" id="importBtn" class="btn ghost"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Import backup</button>\n' +
+    '<input id="importFile" type="file" accept=".json,application/json" hidden>\n' +
+    '<span id="backupStatus" class="muted"></span>\n' +
+    '</div>\n' +
+    '<div id="backupError" class="err"></div>\n' +
     '</section>\n' +
     '<section class="card">\n' +
     '<h2 class="section-title">Danger zone</h2>\n' +
@@ -405,6 +416,64 @@ export function renderSettingsPage(): string {
     '  });\n' +
     '  document.getElementById("confirmYesBtn").addEventListener("click", runAction);\n' +
     '  document.getElementById("reloadBtn").addEventListener("click", load);\n' +
+    '  document.getElementById("exportBtn").addEventListener("click", function () {\n' +
+    '    var btn = document.getElementById("exportBtn");\n' +
+    '    var status = document.getElementById("backupStatus");\n' +
+    '    btn.disabled = true;\n' +
+    '    status.textContent = "Preparing…";\n' +
+    '    api("/folders/export").then(function (backup) {\n' +
+    '      btn.disabled = false;\n' +
+    '      var blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });\n' +
+    '      var a = document.createElement("a");\n' +
+    '      a.href = URL.createObjectURL(blob);\n' +
+    '      a.download = "game-folders-backup-" + String(backup.exportedAt || "").slice(0, 10) + ".json";\n' +
+    '      document.body.appendChild(a);\n' +
+    '      a.click();\n' +
+    '      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);\n' +
+    '      var n = 0;\n' +
+    '      (backup.folders || []).forEach(function (f) { n += (f.games || []).length; });\n' +
+    '      status.textContent = "Exported " + n + " game(s) in " + (backup.folders || []).length + " group(s).";\n' +
+    '    }, function (e) {\n' +
+    '      btn.disabled = false;\n' +
+    '      status.textContent = "";\n' +
+    '      document.getElementById("backupError").textContent = e.message;\n' +
+    '    });\n' +
+    '  });\n' +
+    '  document.getElementById("importBtn").addEventListener("click", function () {\n' +
+    '    document.getElementById("importFile").click();\n' +
+    '  });\n' +
+    '  document.getElementById("importFile").addEventListener("change", function () {\n' +
+    '    var input = document.getElementById("importFile");\n' +
+    '    var status = document.getElementById("backupStatus");\n' +
+    '    if (!input.files || !input.files.length) return;\n' +
+    '    var file = input.files[0];\n' +
+    '    input.value = "";\n' +
+    '    var reader = new FileReader();\n' +
+    '    reader.onload = function () {\n' +
+    '      var backup;\n' +
+    '      try {\n' +
+    '        backup = JSON.parse(String(reader.result || ""));\n' +
+    '      } catch (e) {\n' +
+    '        document.getElementById("backupError").textContent = "That file is not valid JSON.";\n' +
+    '        return;\n' +
+    '      }\n' +
+    '      status.textContent = "Importing…";\n' +
+    '      api("/folders/import", {\n' +
+    '        method: "POST",\n' +
+    '        headers: { "Content-Type": "application/json" },\n' +
+    '        body: JSON.stringify(backup)\n' +
+    '      }).then(function (r) {\n' +
+    '        status.textContent = "Imported " + r.gamesCreated + " new game(s) into " +\n' +
+    '          (r.foldersCreated + r.foldersReused) + " folder(s)" +\n' +
+    '          (r.gamesSkipped ? " (" + r.gamesSkipped + " already existed, skipped)" : "") + ".";\n' +
+    '        load();\n' +
+    '      }, function (e) {\n' +
+    '        status.textContent = "";\n' +
+    '        document.getElementById("backupError").textContent = e.message;\n' +
+    '      });\n' +
+    '    };\n' +
+    '    reader.readAsText(file);\n' +
+    '  });\n' +
     '  initTheme();\n' +
     '  load();\n' +
     '})();\n' +
