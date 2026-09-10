@@ -143,16 +143,26 @@ export class ImportWorker {
 
       // Fetch entry page (SSRF-guarded inside downloader). Adapter-resolved
       // entries point at the discovered game entry; otherwise the raw source.
+      // When the adapter already fetched the frame HTML during resolution,
+      // reuse it to avoid a redundant network round-trip.
       const detectTarget =
         resolved?.entryUrl ?? resolved?.gameUrl ?? job.sourceUrl;
-      const entry = await this.downloader.fetchBuffer(detectTarget, {
-        timeoutMs: 30_000,
-      });
-      // Policy: final URL after redirects must also be allowlisted.
-      this.policy.assertAllowed(entry.finalUrl);
+      let html: string;
+      let finalUrl = detectTarget;
+      if (resolved?.entryHtml) {
+        html = resolved.entryHtml;
+        finalUrl = resolved.entryUrl ?? detectTarget;
+        this.policy.assertAllowed(finalUrl);
+      } else {
+        const entry = await this.downloader.fetchBuffer(detectTarget, {
+          timeoutMs: 30_000,
+        });
+        // Policy: final URL after redirects must also be allowlisted.
+        this.policy.assertAllowed(entry.finalUrl);
+        finalUrl = entry.finalUrl;
+        html = entry.body.toString('utf8').slice(0, 1_000_000);
+      }
       this.throwIfCancelled(await this.get(jobId));
-
-      const html = entry.body.toString('utf8').slice(0, 1_000_000);
       await this.update(jobId, { status: 'detecting', progress: 15 });
 
       // Detect engine via composite confidence scoring. Adapter-resolved
@@ -160,9 +170,8 @@ export class ImportWorker {
       // the engine — non-Unity sources are never forced into Unity.
       const detection = await this.detector.detect({
         sourceUrl: resolved?.canonicalUrl ?? job.sourceUrl,
-        finalUrl: entry.finalUrl,
+        finalUrl,
         html,
-        contentType: entry.contentType,
         ...(resolved
           ? { fileNames: resolved.assetUrls.map(basenameOfUrl) }
           : {}),
@@ -187,7 +196,7 @@ export class ImportWorker {
       await this.update(jobId, { status: 'downloading', progress: 30 });
       const pkg = await engine.import({
         jobId,
-        sourceUrl: entry.finalUrl,
+        sourceUrl: finalUrl,
         workDir,
         limits: defaultImportLimits(),
         ...(resolved ? { resolvedSource: resolved } : {}),

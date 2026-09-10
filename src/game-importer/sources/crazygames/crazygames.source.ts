@@ -222,6 +222,7 @@ export class CrazyGamesSourceAdapter implements GameSourceAdapter {
       canonicalUrl: canonical,
       gameUrl: frameUrl,
       entryUrl: frame.finalUrl,
+      entryHtml: frameHtml,
       assetUrls,
       ...(unityBuild ? { unityBuild } : {}),
       ...(metadata ? { metadata } : {}),

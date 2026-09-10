@@ -34,6 +34,12 @@ export interface ResolvedGameSource {
   gameUrl?: string;
   /** Entry HTML URL for engine detection/import (frame or canonical page). */
   entryUrl?: string;
+  /**
+   * Pre-fetched HTML of the entry page (frame or canonical). When present,
+   * the worker skips a redundant fetch for engine detection — the adapter
+   * already fetched this during resolution.
+   */
+  entryHtml?: string;
   /** Absolute http(s) asset URLs exposed to the browser. Hints only. */
   assetUrls: string[];
   /**
