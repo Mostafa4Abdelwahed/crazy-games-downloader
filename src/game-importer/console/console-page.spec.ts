@@ -247,9 +247,11 @@ describe('management console page', () => {
     // Bulk delete confirms, then DELETEs one by one.
     expect(html).toContain('window.confirm("Delete "');
     expect(html).toContain('method: "DELETE"');
-    // Bulk retry forces fresh runs, preserving each job folder.
-    expect(html).toContain('force: true');
-    expect(html).toContain('Retried " + done + " job(s) as fresh runs.');
+    // Bulk retry re-queues the same rows in place via one call (no
+    // new rows, totals unchanged) and reports skipped ones.
+    expect(html).toContain('"/game-imports/retry"');
+    expect(html).toContain('body: JSON.stringify({ jobIds: ids })');
+    expect(html).toContain('totals unchanged.');
   });
 
   it('polls the job list only while jobs are in flight, never when idle', () => {

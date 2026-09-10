@@ -12,6 +12,7 @@ import { CreateImportDto } from './dto/create-import.dto';
 import { BatchImportDto } from './dto/batch-import.dto';
 import { DiscoverImportDto } from './dto/discover-import.dto';
 import { FolderScopeDto } from './dto/folder.dto';
+import { RetryJobsDto } from './dto/retry-jobs.dto';
 import { GameImportsService } from './game-imports.service';
 
 /**
@@ -37,6 +38,12 @@ export class GameImportsController {
   @HttpCode(200)
   retryFailed(@Body() dto: FolderScopeDto) {
     return this.service.retryFailed(dto.folderId);
+  }
+
+  @Post('retry')
+  @HttpCode(200)
+  retryJobs(@Body() dto: RetryJobsDto) {
+    return this.service.retryJobs(dto.jobIds);
   }
 
   @Post('discover')

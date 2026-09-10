@@ -743,42 +743,91 @@ export class GameImportsService implements OnModuleInit {
   }
 
   /**
-   * Re-run every FAILED job in one scope as fresh forced runs (same
-   * folder). Old failed rows are kept as history; the new runs are new
-   * rows. `folderId`: a real folder id, `'none'` for ungrouped only,
-   * omitted for everything.
+   * Reset one failed/cancelled row back to queued and re-enqueue it IN
+   * PLACE (same id, same seq, same folder). Unlike force-create, this
+   * never adds rows — folder totals stay stable across retries.
+   */
+  private async resetForRetry(e: ImportJobEntity): Promise<ImportJob> {
+    e.status = 'queued';
+    e.progress = 0;
+    e.downloadedFiles = 0;
+    e.totalFiles = 0;
+    e.currentStep = 'queued';
+    e.error = null;
+    e.errorCode = null;
+    e.packageUrl = null;
+    e.logs = [
+      ...(e.logs ?? []),
+      {
+        at: new Date().toISOString(),
+        level: 'info',
+        message: 'Retried by user — queued again',
+        step: 'queued',
+      },
+    ];
+    await this.jobs.save(e);
+    await this.queue.enqueue(e.id);
+    return toJob(e);
+  }
+
+  /**
+   * Retry explicit job ids in place. Only failed/cancelled rows are
+   * retried; anything else (missing, in-flight, completed) is reported
+   * in `skipped` and left untouched — resetting a running or finished
+   * job would corrupt it.
+   */
+  async retryJobs(ids: string[]): Promise<{
+    retried: number;
+    jobs: ImportJob[];
+    skipped: { id: string; reason: string }[];
+  }> {
+    const jobs: ImportJob[] = [];
+    const skipped: { id: string; reason: string }[] = [];
+    const seen = new Set<string>();
+    for (const id of ids ?? []) {
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const e = await this.jobs.findOne({ where: { id } });
+      if (!e) {
+        skipped.push({ id, reason: 'not-found' });
+        continue;
+      }
+      if (e.status !== 'failed' && e.status !== 'cancelled') {
+        skipped.push({ id, reason: `status-${e.status}` });
+        continue;
+      }
+      jobs.push(await this.resetForRetry(e));
+    }
+    return { retried: jobs.length, jobs, skipped };
+  }
+
+  /**
+   * Re-run every FAILED job in one scope IN PLACE (same rows, back to
+   * queued). Totals never inflate: retrying 40 failed games keeps 40
+   * rows, they just move back to in-flight. `folderId`: a real folder
+   * id, `'none'` for ungrouped only, omitted for everything.
    */
   async retryFailed(folderId?: string | null): Promise<{
     retried: number;
-    created: number;
-    reused: number;
     jobs: ImportJob[];
-    duplicates: {
-      sourceUrl: string;
-      jobId: string;
-      folderName: string | null;
-    }[];
   }> {
     const where: FindOptionsWhere<ImportJobEntity> = { status: 'failed' };
-    let scope: string | null = null;
     if (folderId !== undefined && folderId !== null && folderId !== 'none') {
       await this.folders.assertExists(folderId);
-      scope = folderId;
       where.folderId = folderId;
     } else if (folderId === 'none') {
       where.folderId = IsNull() as unknown as string;
     }
     const failed = await this.jobs.find({
       where,
-      select: ['sourceUrl'],
+      select: ['id'],
       order: { updatedAt: 'DESC' },
     });
     if (!failed.length) {
-      return { retried: 0, created: 0, reused: 0, jobs: [], duplicates: [] };
+      return { retried: 0, jobs: [] };
     }
-    const urls = [...new Set(failed.map((j) => j.sourceUrl))];
-    const batch = await this.createBatch(urls, scope, true);
-    return { retried: batch.created + batch.reused, ...batch };
+    const r = await this.retryJobs(failed.map((j) => j.id));
+    return { retried: r.retried, jobs: r.jobs };
   }
 
   /**

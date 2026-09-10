@@ -970,28 +970,21 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '    var ids = selectedIds();\n' +
     '    if (!ids.length) return;\n' +
     '    bulkRetry.disabled = true;\n' +
-    '    var done = 0;\n' +
-    '    var next = function (i) {\n' +
-    '      if (i >= ids.length) {\n' +
-    '        bulkRetry.disabled = false;\n' +
-    '        selected = {};\n' +
-    '        document.getElementById("formStatus").textContent = "Retried " + done + " job(s) as fresh runs.";\n' +
-    '        jobPage = 1;\n' +
-    '        loadJobs();\n' +
-    '        return;\n' +
-    '      }\n' +
-    '      var info = knownJobs[ids[i]] || {};\n' +
-    '      var body = { sourceUrl: info.sourceUrl, force: true };\n' +
-    '      var scope = info.folderId ? info.folderId : (FOLDER_ID === "none" ? null : FOLDER_ID);\n' +
-    '      if (scope) body.folderId = scope;\n' +
-    '      if (!body.sourceUrl) { next(i + 1); return; }\n' +
-    '      api("/game-imports", {\n' +
-    '        method: "POST",\n' +
-    '        headers: { "Content-Type": "application/json" },\n' +
-    '        body: JSON.stringify(body)\n' +
-    '      }).then(function () { done += 1; next(i + 1); }, function () { next(i + 1); });\n' +
-    '    };\n' +
-    '    next(0);\n' +
+    '    api("/game-imports/retry", {\n' +
+    '      method: "POST",\n' +
+    '      headers: { "Content-Type": "application/json" },\n' +
+    '      body: JSON.stringify({ jobIds: ids })\n' +
+    '    }).then(function (r) {\n' +
+    '      bulkRetry.disabled = false;\n' +
+    '      selected = {};\n' +
+    '      var skipped = (r.skipped && r.skipped.length) ? (" (" + r.skipped.length + " skipped: already running or finished)") : "";\n' +
+    '      document.getElementById("formStatus").textContent = "Retried " + r.retried + " job(s) in place — totals unchanged." + skipped;\n' +
+    '      jobPage = 1;\n' +
+    '      loadJobs();\n' +
+    '    }, function (e) {\n' +
+    '      bulkRetry.disabled = false;\n' +
+    '      alert(e.message);\n' +
+    '    });\n' +
     '  });\n' +
     '  function initFolderTitle() {\n' +
     '    var el = document.getElementById("consoleTitle");\n' +

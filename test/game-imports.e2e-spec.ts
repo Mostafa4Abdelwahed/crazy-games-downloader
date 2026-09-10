@@ -780,7 +780,7 @@ describe('Game imports integration', () => {
   });
 
   describe('retry-failed, storage sizes and export', () => {
-    it('retries every failed game in a folder as forced fresh runs', async () => {
+    it('retries failed games in place without adding rows', async () => {
       const folder = (
         await request(app.getHttpServer())
           .post('/folders')
@@ -803,22 +803,47 @@ describe('Game imports integration', () => {
         logs: [],
       });
       await jobs.save(failed);
+      const before = await jobs.count();
 
       const res = await request(app.getHttpServer())
         .post('/game-imports/retry-failed')
         .send({ folderId: folder.id })
         .expect(200);
       expect(res.body.retried).toBe(1);
-      expect(res.body.created).toBe(1);
-      expect(res.body.jobs[0].sourceUrl).toBe(base);
-      expect(res.body.jobs[0].id).not.toBe(failed.id);
+      // Same row, back to queued — totals never inflate.
+      expect(res.body.jobs[0].id).toBe(failed.id);
+      expect(res.body.jobs[0].status).toBe('queued');
+      expect(await jobs.count()).toBe(before);
 
-      // Nothing left to retry afterwards for the *failed* rows still
-      // present… the forced run is queued (may still be in flight), but
-      // the only failed row is the seed, which was already retried into
-      // a new in-flight row. A second call finds no *new* failures only
-      // if the retry already finished — so just assert the shape here.
-      expect(res.body.duplicates).toEqual([]);
+      // Explicit ids: a fresh failed seed retries; unknown ids report
+      // not-found. (Seeds are inserted directly, never enqueued, so no
+      // background worker can touch them first.)
+      const seed = jobs.create({
+        id: randomUUID(),
+        sourceUrl: base,
+        status: 'failed',
+        progress: 0,
+        detectedEngine: null,
+        downloadedFiles: 0,
+        totalFiles: 0,
+        currentStep: 'failed',
+        error: 'boom',
+        packageUrl: null,
+        folderId: folder.id,
+        logs: [],
+      });
+      await jobs.save(seed);
+      const missing = randomUUID();
+      const again = await request(app.getHttpServer())
+        .post('/game-imports/retry')
+        .send({ jobIds: [seed.id, missing] })
+        .expect(200);
+      expect(again.body.retried).toBe(1);
+      expect(again.body.jobs[0].id).toBe(seed.id);
+      expect(again.body.skipped).toEqual([
+        { id: missing, reason: 'not-found' },
+      ]);
+      expect(await jobs.count()).toBe(before + 1);
     });
 
     it('returns zero when a folder has no failed games', async () => {
@@ -832,13 +857,7 @@ describe('Game imports integration', () => {
         .post('/game-imports/retry-failed')
         .send({ folderId: folder.id })
         .expect(200);
-      expect(res.body).toEqual({
-        retried: 0,
-        created: 0,
-        reused: 0,
-        jobs: [],
-        duplicates: [],
-      });
+      expect(res.body).toEqual({ retried: 0, jobs: [] });
     });
 
     it('reports per-folder disk usage with ?storage=true', async () => {

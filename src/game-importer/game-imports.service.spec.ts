@@ -802,31 +802,68 @@ describe('GameImportsService retryFailed', () => {
     ];
   }
 
-  it('re-runs every failed job in scope as forced fresh runs', async () => {
+  it('re-queues failed rows in place without adding rows', async () => {
+    const rows = failedRows();
+    const byId = new Map(rows.map((r) => [r.id, r]));
     const { service, queue, repo } = makeService({
-      find: jest.fn(async () => failedRows()),
+      find: jest.fn(async () => rows),
+      findOne: jest.fn(async ({ where }: never) => {
+        const w = where as { id: string };
+        return byId.get(w.id) ?? null;
+      }),
     });
     const res = await service.retryFailed('f-1');
     expect(res.retried).toBe(2);
-    expect(res.created).toBe(2);
-    expect(res.jobs).toHaveLength(2);
-    expect(queue.enqueue.mock.calls).toHaveLength(2);
-    // The forced runs keep the folder scope.
-    const saved = repo.save.mock.calls.map(
-      (c) => c[0] as { folderId?: string | null },
-    );
-    expect(saved.every((e) => e.folderId === 'f-1')).toBe(true);
+    expect(res.jobs.map((j) => j.id).sort()).toEqual(['f-a', 'f-b']);
+    expect(res.jobs.every((j) => j.status === 'queued')).toBe(true);
+    const enqueued = (queue.enqueue.mock.calls as unknown[][]).map((c) => c[0]);
+    expect(enqueued.sort()).toEqual(['f-a', 'f-b']);
+    // Same rows reset — never new ones (folder totals stay stable).
+    expect(repo.create).not.toHaveBeenCalled();
+    expect(rows[0].error).toBeNull();
+    expect(rows[0].progress).toBe(0);
   });
 
   it('returns zero when nothing failed', async () => {
     const { service } = makeService();
     await expect(service.retryFailed('f-1')).resolves.toEqual({
       retried: 0,
-      created: 0,
-      reused: 0,
       jobs: [],
-      duplicates: [],
     });
+  });
+});
+
+describe('GameImportsService retryJobs', () => {
+  it('retries failed and cancelled rows, skipping the rest', async () => {
+    const byId: Record<string, ReturnType<typeof toEntity>> = {
+      'f-a': toEntity({ id: 'f-a', status: 'failed' }),
+      'c-a': toEntity({ id: 'c-a', status: 'cancelled' }),
+      'run-a': toEntity({ id: 'run-a', status: 'downloading' }),
+      'done-a': toEntity({ id: 'done-a', status: 'completed' }),
+    };
+    const { service, queue } = makeService({
+      findOne: jest.fn(async ({ where }: never) => {
+        const w = where as { id: string };
+        return byId[w.id] ?? null;
+      }),
+    });
+    const res = await service.retryJobs([
+      'f-a',
+      'c-a',
+      'run-a',
+      'done-a',
+      'missing',
+      'f-a',
+    ]);
+    expect(res.retried).toBe(2);
+    expect(res.jobs.map((j) => j.id).sort()).toEqual(['c-a', 'f-a']);
+    const enqueued = (queue.enqueue.mock.calls as unknown[][]).map((c) => c[0]);
+    expect(enqueued.sort()).toEqual(['c-a', 'f-a']);
+    expect(res.skipped).toEqual([
+      { id: 'run-a', reason: 'status-downloading' },
+      { id: 'done-a', reason: 'status-completed' },
+      { id: 'missing', reason: 'not-found' },
+    ]);
   });
 });
 
