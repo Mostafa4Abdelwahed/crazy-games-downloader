@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import * as net from 'node:net';
 import { ImportJobEntity } from './entities/import-job.entity';
 import { RunServerEntity } from './entities/run-server.entity';
@@ -172,6 +173,20 @@ function isAlive(pid: number): boolean {
 function killPid(pid: number): boolean {
   try {
     process.kill(pid, 'SIGTERM');
+    // On Windows, SIGTERM is emulated (not a real signal) and the
+    // process may linger holding file handles.  Force-kill the entire
+    // process tree (/T) so child processes (e.g. python workers) and
+    // the OS release locks promptly.
+    if (process.platform === 'win32') {
+      try {
+        execFileSync('taskkill', ['/F', '/T', '/PID', String(pid)], {
+          stdio: 'ignore',
+          timeout: 3000,
+        });
+      } catch {
+        /* process already gone */
+      }
+    }
     return true;
   } catch {
     return false;

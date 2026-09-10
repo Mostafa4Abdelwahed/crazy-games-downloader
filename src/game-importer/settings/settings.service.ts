@@ -229,6 +229,11 @@ export class SettingsService {
         `Could not stop running game servers: ${(err as Error).message}`,
       );
     }
+    // Give Windows time to fully release file handles after processes
+    // are killed — SIGTERM + taskkill may not be instant on all drives.
+    if (stoppedServers > 0) {
+      await new Promise((r) => setTimeout(r, 500));
+    }
     const { cleared, failed } = await this.rmDirChildren(this.storageRoot());
     for (const f of failed) {
       this.logger.error(
