@@ -856,5 +856,62 @@ describe('Game imports integration', () => {
         true,
       );
     });
+
+    it('imports a backup file, creating folders and skipping existing games', async () => {
+      const first = await request(app.getHttpServer())
+        .post('/folders/import')
+        .send({
+          exportedAt: new Date().toISOString(),
+          folders: [
+            {
+              name: 'Restored',
+              games: [
+                { sourceUrl: gameUrl(10) },
+                { sourceUrl: base },
+                { sourceUrl: 'https://partner.example/games/demo-99' },
+              ],
+            },
+            { name: 'Ungrouped', games: [] },
+          ],
+        })
+        .expect(200);
+      // gameUrl(10) + base already exist (skipped); demo-99 is new.
+      expect(first.body.gamesCreated).toBe(1);
+      expect(first.body.gamesSkipped).toBe(2);
+      expect(first.body.foldersCreated).toBe(1);
+
+      // Re-importing the same file only reuses; games stay skipped.
+      const second = await request(app.getHttpServer())
+        .post('/folders/import')
+        .send({
+          folders: [
+            {
+              name: 'Restored',
+              games: [
+                { sourceUrl: gameUrl(10) },
+                { sourceUrl: base },
+                { sourceUrl: 'https://partner.example/games/demo-99' },
+              ],
+            },
+          ],
+        })
+        .expect(200);
+      expect(second.body).toEqual({
+        foldersCreated: 0,
+        foldersReused: 1,
+        gamesCreated: 0,
+        gamesSkipped: 3,
+      });
+
+      // …and rejects garbage instead of 500-ing.
+      await request(app.getHttpServer())
+        .post('/folders/import')
+        .send({ folders: 'nope' })
+        .expect(400);
+      await request(app.getHttpServer())
+        .post('/folders/import')
+        .send({ folders: [{ name: 'X', games: [{ sourceUrl: 'x' }] }] })
+        .expect(400);
+    });
   });
 });

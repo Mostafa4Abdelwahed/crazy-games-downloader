@@ -97,6 +97,8 @@ export interface ImportJobSummary {
   status: ImportState;
   progress: number;
   updatedAt: string;
+  /** Owning folder (null = ungrouped); needed for folder-preserving retry. */
+  folderId: string | null;
 }
 
 /**
@@ -313,6 +315,7 @@ function toJobSummary(e: ImportJobEntity): ImportJobSummary {
     status: e.status,
     progress: e.progress,
     updatedAt: e.updatedAt?.toISOString?.() ?? new Date().toISOString(),
+    folderId: e.folderId ?? null,
   };
 }
 
@@ -765,6 +768,66 @@ export class GameImportsService implements OnModuleInit {
     const urls = [...new Set(failed.map((j) => j.sourceUrl))];
     const batch = await this.createBatch(urls, scope, true);
     return { retried: batch.created + batch.reused, ...batch };
+  }
+
+  /**
+   * Restore a library from a backup file (produced by GET
+   * /folders/export). Folders are matched by NAME (ids never survive a
+   * restore): missing folders are created, existing ones reused, and the
+   * 'Ungrouped' group files jobs outside any folder. Games that already
+   * exist anywhere are skipped via the global dedup — the import never
+   * duplicates, only fills in what is missing.
+   */
+  async importBackup(backup: {
+    folders?: { name?: unknown; games?: { sourceUrl?: unknown }[] }[];
+  }): Promise<{
+    foldersCreated: number;
+    foldersReused: number;
+    gamesCreated: number;
+    gamesSkipped: number;
+  }> {
+    const groups = Array.isArray(backup?.folders) ? backup.folders : [];
+    let foldersCreated = 0;
+    let foldersReused = 0;
+    let gamesCreated = 0;
+    let gamesSkipped = 0;
+    const knownNames = new Set((await this.folders.list()).map((f) => f.name));
+    const seenFolders = new Map<string, string | null>();
+    for (const group of groups) {
+      const rawName = typeof group?.name === 'string' ? group.name.trim() : '';
+      const games = Array.isArray(group?.games) ? group.games : [];
+      // Nameless groups are skipped; the exporter's ungrouped bucket
+      // (id null, name 'Ungrouped') files jobs outside any folder.
+      if (!rawName) continue;
+      const ungrouped = rawName.toLowerCase() === 'ungrouped';
+      let folderId: string | null = null;
+      if (!ungrouped) {
+        const hit = seenFolders.get(rawName);
+        if (hit !== undefined) {
+          folderId = hit;
+        } else {
+          const existed = knownNames.has(rawName);
+          const view = await this.folders.resolveByName(rawName);
+          folderId = view.id;
+          knownNames.add(rawName);
+          if (existed) foldersReused += 1;
+          else foldersCreated += 1;
+          seenFolders.set(rawName, folderId);
+        }
+      }
+      for (const g of games) {
+        if (typeof g?.sourceUrl !== 'string' || !g.sourceUrl.trim()) continue;
+        const r = await this.createOne(g.sourceUrl.trim(), folderId);
+        if (r.reused) gamesSkipped += 1;
+        else gamesCreated += 1;
+      }
+    }
+    this.logger.log(
+      `Backup import: ${foldersCreated} folder(s) created, ` +
+        `${foldersReused} reused, ${gamesCreated} game(s) created, ` +
+        `${gamesSkipped} skipped (already exist).`,
+    );
+    return { foldersCreated, foldersReused, gamesCreated, gamesSkipped };
   }
 
   async cancel(id: string): Promise<ImportJob> {

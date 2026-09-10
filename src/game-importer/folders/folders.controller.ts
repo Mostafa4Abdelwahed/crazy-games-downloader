@@ -15,9 +15,11 @@ import type { Response } from 'express';
 import {
   AssignJobDto,
   CreateFolderDto,
+  ImportBackupDto,
   RenameFolderDto,
 } from '../dto/folder.dto';
 import { FoldersService } from './folders.service';
+import { GameImportsService } from '../game-imports.service';
 
 /**
  * Folders API for the home page: named groups of games, each with its
@@ -26,11 +28,20 @@ import { FoldersService } from './folders.service';
  */
 @Controller('folders')
 export class FoldersController {
-  constructor(private readonly folders: FoldersService) {}
+  constructor(
+    private readonly folders: FoldersService,
+    private readonly imports: GameImportsService,
+  ) {}
 
   @Get()
   list(@Query('storage') storage?: string) {
     return this.folders.list(storage === 'true' || storage === '1');
+  }
+
+  @Post('import')
+  @HttpCode(200)
+  importBackup(@Body() dto: ImportBackupDto) {
+    return this.imports.importBackup(dto);
   }
 
   // NOTE: static route registered before `:id` so "export" is never

@@ -173,6 +173,27 @@ export class FoldersService {
     if (!f) throw new BadRequestException(`Folder not found: ${folderId}`);
   }
 
+  /**
+   * Find a folder by name, creating it when missing. Used by backup
+   * import (ids never survive a restore, names do).
+   */
+  async resolveByName(name: string): Promise<FolderView> {
+    const clean = (name ?? '').trim();
+    if (!clean) throw new BadRequestException('Folder name is required.');
+    const existing = await this.folders.findOne({ where: { name: clean } });
+    if (existing) {
+      const all = await this.jobs.find({
+        where: { folderId: existing.id },
+        select: ['id', 'status'],
+      });
+      return this.toView(
+        existing,
+        all.map((j) => j.status),
+      );
+    }
+    return this.create(clean);
+  }
+
   /** Real packages root (same root for every folder; shown for copy). */
   packagesRoot(): string {
     return path.resolve(process.env.STORAGE_LOCAL_ROOT ?? './data/packages');

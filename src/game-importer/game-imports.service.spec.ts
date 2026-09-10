@@ -65,6 +65,14 @@ function makeService(repoOverrides: Record<string, jest.Mock> = {}) {
       jobCounts: { total: 0, inFlight: 0, completed: 0, failed: 0 },
       packagesRoot: '/packages',
     })),
+    list: jest.fn(async () => []),
+    resolveByName: jest.fn(async (name: string) => ({
+      id: `folder-${name}`,
+      name,
+      createdAt: new Date().toISOString(),
+      jobCounts: { total: 0, inFlight: 0, completed: 0, failed: 0 },
+      packagesRoot: '/packages',
+    })),
   };
   const launchServer = jest.fn(async () => ({
     url: 'http://localhost:54321/',
@@ -460,6 +468,7 @@ describe('GameImportsService list pagination', () => {
       status: 'queued',
       progress: 0,
       updatedAt: expect.any(String),
+      folderId: null,
     });
     // Heavy fields stay out of the listing entirely.
     expect(res.items[0]).not.toHaveProperty('logs');
@@ -958,5 +967,89 @@ describe('GameImportsService run-server persistence', () => {
       cleared: 0,
     });
     expect(servers.remove).not.toHaveBeenCalled();
+  });
+});
+
+describe('GameImportsService importBackup', () => {
+  it('creates missing folders, reuses names, skips existing games', async () => {
+    const { service, folders } = makeService({
+      find: jest.fn(async () => []),
+    });
+    const res = await service.importBackup({
+      folders: [
+        {
+          name: 'Action',
+          games: [{ sourceUrl: 'https://www.crazygames.com/game/aa' }],
+        },
+        {
+          name: 'Action',
+          games: [{ sourceUrl: 'https://www.crazygames.com/game/bb' }],
+        },
+        {
+          name: 'Ungrouped',
+          games: [{ sourceUrl: 'https://www.crazygames.com/game/cc' }],
+        },
+      ],
+    });
+    expect(res).toEqual({
+      foldersCreated: 1,
+      foldersReused: 0,
+      gamesCreated: 3,
+      gamesSkipped: 0,
+    });
+    // Same name resolved once; ungrouped never touches folders.
+    expect(folders.resolveByName).toHaveBeenCalledTimes(1);
+    expect(folders.resolveByName).toHaveBeenCalledWith('Action');
+  });
+
+  it('reuses pre-existing folders and skips already-imported games', async () => {
+    const prior = toEntity({
+      id: 'old-run',
+      status: 'completed',
+      sourceUrl: 'https://www.crazygames.com/game/aa',
+    });
+    const { service, folders } = makeService({
+      find: jest.fn(async ({ where }: any) =>
+        String(where?.sourceKey ?? '').includes('/aa') ? [prior] : [],
+      ),
+    });
+    (folders.list as jest.Mock).mockResolvedValueOnce([
+      { id: 'f-action', name: 'Action' },
+    ]);
+    (folders.resolveByName as jest.Mock).mockResolvedValueOnce({
+      id: 'f-action',
+      name: 'Action',
+    });
+    const res = await service.importBackup({
+      folders: [
+        {
+          name: 'Action',
+          games: [
+            { sourceUrl: 'https://www.crazygames.com/game/aa' },
+            { sourceUrl: 'https://www.crazygames.com/game/bb' },
+          ],
+        },
+      ],
+    });
+    expect(res).toEqual({
+      foldersCreated: 0,
+      foldersReused: 1,
+      gamesCreated: 1,
+      gamesSkipped: 1,
+    });
+  });
+
+  it('ignores malformed groups and empty urls', async () => {
+    const { service } = makeService({
+      find: jest.fn(async () => []),
+    });
+    const res = await service.importBackup({
+      folders: [
+        { name: '  ', games: [{ sourceUrl: 'https://x.example/1' }] },
+        { name: 'Ok', games: [{ sourceUrl: '' }, {}] },
+      ] as never,
+    });
+    expect(res.gamesCreated).toBe(0);
+    expect(res.gamesSkipped).toBe(0);
   });
 });

@@ -63,6 +63,16 @@ describe('home page (folders)', () => {
     expect(html).toContain('application/json');
   });
 
+  it('imports a backup file back into folders', () => {
+    const html = renderHomePage();
+    expect(html).toContain('id="importBtn"');
+    expect(html).toContain('Import backup');
+    expect(html).toContain('id="importFile"');
+    expect(html).toContain('api("/folders/import"');
+    expect(html).toContain('That file is not valid JSON.');
+    expect(html).toContain('already existed, skipped');
+  });
+
   it('never executes game code or inlines untrusted URLs', () => {
     const html = renderHomePage();
     expect(html).not.toContain('eval(');

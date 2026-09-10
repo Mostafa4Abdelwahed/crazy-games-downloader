@@ -181,6 +181,8 @@ export function renderHomePage(): string {
     '<h2 class="section-title">Your folders</h2>\n' +
     '<div class="row" style="margin-top:0">\n' +
     '<button type="button" id="exportBtn" class="btn ghost"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export backup (JSON)</button>\n' +
+    '<button type="button" id="importBtn" class="btn ghost"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Import backup</button>\n' +
+    '<input id="importFile" type="file" accept=".json,application/json" hidden>\n' +
     '<span id="exportStatus" class="muted"></span>\n' +
     '</div>\n' +
     '<div id="foldersGrid" class="folders"><p class="muted">Loading…</p></div>\n' +
@@ -408,6 +410,41 @@ export function renderHomePage(): string {
     '      status.textContent = "";\n' +
     '      document.getElementById("foldersError").textContent = e.message;\n' +
     '    });\n' +
+    '  });\n' +
+    '  document.getElementById("importBtn").addEventListener("click", function () {\n' +
+    '    document.getElementById("importFile").click();\n' +
+    '  });\n' +
+    '  document.getElementById("importFile").addEventListener("change", function () {\n' +
+    '    var input = document.getElementById("importFile");\n' +
+    '    var status = document.getElementById("exportStatus");\n' +
+    '    if (!input.files || !input.files.length) return;\n' +
+    '    var file = input.files[0];\n' +
+    '    input.value = "";\n' +
+    '    var reader = new FileReader();\n' +
+    '    reader.onload = function () {\n' +
+    '      var backup;\n' +
+    '      try {\n' +
+    '        backup = JSON.parse(String(reader.result || ""));\n' +
+    '      } catch (e) {\n' +
+    '        document.getElementById("foldersError").textContent = "That file is not valid JSON.";\n' +
+    '        return;\n' +
+    '      }\n' +
+    '      status.textContent = "Importing…";\n' +
+    '      api("/folders/import", {\n' +
+    '        method: "POST",\n' +
+    '        headers: { "Content-Type": "application/json" },\n' +
+    '        body: JSON.stringify(backup)\n' +
+    '      }).then(function (r) {\n' +
+    '        status.textContent = "Imported " + r.gamesCreated + " new game(s) into " +\n' +
+    '          (r.foldersCreated + r.foldersReused) + " folder(s)" +\n' +
+    '          (r.gamesSkipped ? " (" + r.gamesSkipped + " already existed, skipped)" : "") + ".";\n' +
+    '        load();\n' +
+    '      }, function (e) {\n' +
+    '        status.textContent = "";\n' +
+    '        document.getElementById("foldersError").textContent = e.message;\n' +
+    '      });\n' +
+    '    };\n' +
+    '    reader.readAsText(file);\n' +
     '  });\n' +
     '  document.getElementById("renameSaveBtn").addEventListener("click", saveRename);\n' +
     '  document.getElementById("renameCancelBtn").addEventListener("click", function () {\n' +

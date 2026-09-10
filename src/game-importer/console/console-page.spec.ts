@@ -232,6 +232,26 @@ describe('management console page', () => {
     expect(html).toContain('No failed games to retry in this folder.');
   });
 
+  it('selects rows for bulk delete and bulk retry', () => {
+    const html = renderConsolePage();
+    // Checkbox column in the header and on every row.
+    expect(html).toContain('id="selAll"');
+    expect(html).toContain('class=\\"rowSel\\"');
+    // Bulk bar with both actions, hidden until something is selected.
+    expect(html).toContain('id="bulkBar"');
+    expect(html).toContain('id="bulkDeleteBtn"');
+    expect(html).toContain('id="bulkRetryBtn"');
+    expect(html).toContain('id="bulkClearBtn"');
+    // Row clicks still open details; checkbox clicks do not.
+    expect(html).toContain('classList.contains("rowSel")');
+    // Bulk delete confirms, then DELETEs one by one.
+    expect(html).toContain('window.confirm("Delete "');
+    expect(html).toContain('method: "DELETE"');
+    // Bulk retry forces fresh runs, preserving each job folder.
+    expect(html).toContain('force: true');
+    expect(html).toContain('Retried " + done + " job(s) as fresh runs.');
+  });
+
   it('polls the job list only while jobs are in flight, never when idle', () => {
     const html = renderConsolePage();
     // The only loadJobs interval anywhere is the one inside startPoll(),

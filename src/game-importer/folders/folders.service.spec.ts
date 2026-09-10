@@ -194,6 +194,18 @@ describe('FoldersService', () => {
     }
   });
 
+  it('resolveByName reuses an existing folder or creates a missing one', async () => {
+    const rows = makeRepos([{ id: 'f1', name: 'A', createdAt: new Date() }]);
+    const { service } = makeService(rows);
+    const reused = await service.resolveByName('A');
+    expect(reused.id).toBe('f1');
+    const created = await service.resolveByName('  B  ');
+    expect(created.name).toBe('B');
+    await expect(service.resolveByName('   ')).rejects.toThrow(
+      'Folder name is required',
+    );
+  });
+
   it('list(true) attaches per-folder on-disk usage', async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'fs-'));
     try {

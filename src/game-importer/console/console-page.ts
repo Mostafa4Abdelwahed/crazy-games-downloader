@@ -22,7 +22,10 @@
  * page resolves the folder name client-side and scopes every jobs call.
  */
 export function renderConsolePage(folderId: string = 'none'): string {
-  return (
+  // NOTE: the page is assembled from three parts (not one giant `+`
+  // chain) because a single ~950-term string expression overflows the
+  // parser stack in lint. Output is byte-identical either way.
+  const head: string =
     '<!doctype html>\n' +
     '<html lang="en">\n' +
     '<head>\n' +
@@ -214,6 +217,10 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '.search-wrap svg{position:absolute;left:12px;width:16px;height:16px;stroke:var(--text-3);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}\n' +
     '.search-wrap .field{padding-left:36px;font-size:.85rem}\n' +
     '.search-wrap .field::-webkit-search-cancel-button{cursor:pointer}\n' +
+    '.bulkbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 14px}\n' +
+    '.bulkbar[hidden]{display:none}\n' +
+    '.bulkbar .btn{padding:9px 18px;font-size:.85rem}\n' +
+    'input[type=checkbox].rowSel{width:16px;height:16px;accent-color:var(--brand);cursor:pointer;vertical-align:middle}\n' +
     '.workbench .card{margin:0}\n' +
     '.workbench-right{position:sticky;top:86px;max-height:calc(100vh - 106px);display:flex;flex-direction:column;overflow:hidden}\n' +
     '.workbench-right #detail{overflow-y:auto;min-height:200px}\n' +
@@ -290,8 +297,14 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '<button id="retryFailedBtn" class="btn ghost" type="button" title="Re-run every failed game in this folder as a fresh forced run"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>Retry failed</button>\n' +
     '</div>\n' +
     '<div class="table-wrap">\n' +
-    '<table><thead><tr><th>#</th><th>Source</th><th>Status</th><th>Progress</th><th>Updated</th></tr></thead>\n' +
-    '<tbody id="jobRows"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody></table>\n' +
+    '<table><thead><tr><th><input type="checkbox" id="selAll" class="rowSel" title="Select all on this page" aria-label="Select all on this page"></th><th>#</th><th>Source</th><th>Status</th><th>Progress</th><th>Updated</th></tr></thead>\n' +
+    '<tbody id="jobRows"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody></table>\n' +
+    '</div>\n' +
+    '<div id="bulkBar" class="bulkbar" hidden>\n' +
+    '<span id="selCount" class="muted"></span>\n' +
+    '<button id="bulkRetryBtn" class="btn ghost" type="button">Retry selected</button>\n' +
+    '<button id="bulkDeleteBtn" class="btn danger" type="button">Delete selected</button>\n' +
+    '<button id="bulkClearBtn" class="btn ghost" type="button">Clear</button>\n' +
     '</div>\n' +
     '<div class="row pager">\n' +
     '<button id="jobsPrevBtn" class="btn ghost" type="button" title="Previous page"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><polyline points="15 18 9 12 15 6"/></svg>Prev</button>\n' +
@@ -311,7 +324,8 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '<div id="detail" class="muted">Select a job to inspect it.</div>\n' +
     '</section>\n' +
     '</div>\n' +
-    '</main>\n' +
+    '</main>\n';
+  const tail: string =
     '<div id="discoverModal" class="modal" hidden>\n' +
     '<div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="discoverModalTitle">\n' +
     '<div class="modal-head"><h2 id="discoverModalTitle" class="modal-title">Games on this page</h2>\n' +
@@ -345,6 +359,8 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '  var jobSortDir = "DESC";\n' +
     '  var jobSearchQ = "";\n' +
     '  var searchTimer = null;\n' +
+    '  var selected = {};\n' +
+    '  var knownJobs = {};\n' +
     '  var IN_FLIGHT = ["queued", "detecting", "resolving", "downloading", "extracting", "validating", "uploading"];\n' +
     '  var COPY_ICON = "<svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><rect x=\\"9\\" y=\\"9\\" width=\\"13\\" height=\\"13\\" rx=\\"2\\"/><path d=\\"M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1\\"/></svg>";\n' +
     '  var CHECK_ICON = "<svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><path d=\\"M20 6L9 17l-5-5\\"/></svg>";\n' +
@@ -395,10 +411,12 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '      jobTotalPages = data.totalPages || 1;\n' +
     '      if (jobPage > jobTotalPages) { jobPage = Math.max(jobTotalPages, 1); }\n' +
     '      renderJobsPager();\n' +
-    '      if (!jobs.length) { tb.innerHTML = "<tr><td colspan=\\"5\\" class=\\"muted\\">No jobs match.</td></tr>"; return; }\n' +
+    '      if (!jobs.length) { tb.innerHTML = "<tr><td colspan=\\"6\\" class=\\"muted\\">No jobs match.</td></tr>"; return; }\n' +
     '      var html = "";\n' +
     '      jobs.forEach(function (j) {\n' +
+    '        knownJobs[j.id] = j;\n' +
     '        html += "<tr class=\\"job" + (j.id === selectedId ? " sel" : "") + "\\" data-id=\\"" + esc(j.id) + "\\">" +\n' +
+    '          "<td><input type=\\"checkbox\\" class=\\"rowSel\\" data-id=\\"" + esc(j.id) + "\\"" + (selected[j.id] ? " checked" : "") + " aria-label=\\"Select job\\"></td>" +\n' +
     '          "<td><code>#" + (j.seq != null ? esc(j.seq) : "?") + "</code></td>" +\n' +
     '          "<td>" + esc(j.sourceUrl) + "</td>" +\n' +
     '          "<td><span class=\\"pill " + esc(j.status) + "\\">" + esc(j.status) + "</span></td>" +\n' +
@@ -407,8 +425,21 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '      });\n' +
     '      tb.innerHTML = html;\n' +
     '      Array.prototype.forEach.call(tb.querySelectorAll("tr.job"), function (tr) {\n' +
-    '        tr.addEventListener("click", function () { selectJob(tr.getAttribute("data-id")); });\n' +
+    '        tr.addEventListener("click", function (ev) {\n' +
+    '          if (ev.target && ev.target.classList && ev.target.classList.contains("rowSel")) return;\n' +
+    '          selectJob(tr.getAttribute("data-id"));\n' +
+    '        });\n' +
     '      });\n' +
+    '      Array.prototype.forEach.call(tb.querySelectorAll("input.rowSel"), function (cb) {\n' +
+    '        cb.addEventListener("click", function (ev) { ev.stopPropagation(); });\n' +
+    '        cb.addEventListener("change", function () {\n' +
+    '          var id = cb.getAttribute("data-id");\n' +
+    '          if (cb.checked) selected[id] = true;\n' +
+    '          else delete selected[id];\n' +
+    '          syncBulkBar();\n' +
+    '        });\n' +
+    '      });\n' +
+    '      syncBulkBar();\n' +
     '      // Poll only while something is actually running; stay silent when idle.\n' +
     '      if (jobs.some(function (j) { return IN_FLIGHT.indexOf(j.status) >= 0; })) {\n' +
     '        startPoll();\n' +
@@ -416,7 +447,7 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '        stopPoll();\n' +
     '      }\n' +
     '    }).catch(function (e) {\n' +
-    '      document.getElementById("jobRows").innerHTML = "<tr><td colspan=\\"5\\" class=\\"err\\">" + esc(e.message) + "</td></tr>";\n' +
+    '      document.getElementById("jobRows").innerHTML = "<tr><td colspan=\\"6\\" class=\\"err\\">" + esc(e.message) + "</td></tr>";\n' +
     '    });\n' +
     '  }\n' +
     '  function startPoll() {\n' +
@@ -437,6 +468,20 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '  function gotoJobsPage(p) {\n' +
     '    jobPage = Math.max(1, p);\n' +
     '    loadJobs();\n' +
+    '  }\n' +
+    '  function selectedIds() { return Object.keys(selected); }\n' +
+    '  function syncBulkBar() {\n' +
+    '    var n = selectedIds().length;\n' +
+    '    var bar = document.getElementById("bulkBar");\n' +
+    '    if (bar) bar.hidden = n === 0;\n' +
+    '    var count = document.getElementById("selCount");\n' +
+    '    if (count) count.textContent = n + " selected";\n' +
+    '    var all = document.getElementById("selAll");\n' +
+    '    if (all) {\n' +
+    '      var boxes = document.querySelectorAll("#jobRows input.rowSel");\n' +
+    '      all.checked = boxes.length > 0 &&\n' +
+    '        Array.prototype.every.call(boxes, function (b) { return b.checked; });\n' +
+    '    }\n' +
     '  }\n' +
     '  function diagList(ds) {\n' +
     '    if (!ds || !ds.length) return "<p class=\\"muted\\">No diagnostics.</p>";\n' +
@@ -823,6 +868,76 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '      alert(e.message);\n' +
     '    });\n' +
     '  });\n' +
+    '  var selAll = document.getElementById("selAll");\n' +
+    '  if (selAll) selAll.addEventListener("change", function () {\n' +
+    '    Array.prototype.forEach.call(document.querySelectorAll("#jobRows input.rowSel"), function (cb) {\n' +
+    '      var id = cb.getAttribute("data-id");\n' +
+    '      cb.checked = selAll.checked;\n' +
+    '      if (selAll.checked) selected[id] = true;\n' +
+    '      else delete selected[id];\n' +
+    '    });\n' +
+    '    syncBulkBar();\n' +
+    '  });\n' +
+    '  var bulkClear = document.getElementById("bulkClearBtn");\n' +
+    '  if (bulkClear) bulkClear.addEventListener("click", function () {\n' +
+    '    selected = {};\n' +
+    '    loadJobs();\n' +
+    '  });\n' +
+    '  var bulkDel = document.getElementById("bulkDeleteBtn");\n' +
+    '  if (bulkDel) bulkDel.addEventListener("click", function () {\n' +
+    '    var ids = selectedIds();\n' +
+    '    if (!ids.length) return;\n' +
+    '    if (!window.confirm("Delete " + ids.length + " selected job(s)?\\nPackages are removed from disk.")) return;\n' +
+    '    bulkDel.disabled = true;\n' +
+    '    var done = 0;\n' +
+    '    var next = function (i) {\n' +
+    '      if (i >= ids.length) {\n' +
+    '        bulkDel.disabled = false;\n' +
+    '        selected = {};\n' +
+    '        if (selectedId && ids.indexOf(selectedId) >= 0) {\n' +
+    '          selectedId = null;\n' +
+    '          document.getElementById("detail").innerHTML = "<p class=\\"muted\\">Select a job to inspect it.</p>";\n' +
+    '        }\n' +
+    '        document.getElementById("formStatus").textContent = "Deleted " + done + " job(s).";\n' +
+    '        jobPage = 1;\n' +
+    '        loadJobs();\n' +
+    '        return;\n' +
+    '      }\n' +
+    '      api("/game-imports/" + encodeURIComponent(ids[i]), { method: "DELETE" }).then(function () {\n' +
+    '        done += 1;\n' +
+    '        next(i + 1);\n' +
+    '      }, function () { next(i + 1); });\n' +
+    '    };\n' +
+    '    next(0);\n' +
+    '  });\n' +
+    '  var bulkRetry = document.getElementById("bulkRetryBtn");\n' +
+    '  if (bulkRetry) bulkRetry.addEventListener("click", function () {\n' +
+    '    var ids = selectedIds();\n' +
+    '    if (!ids.length) return;\n' +
+    '    bulkRetry.disabled = true;\n' +
+    '    var done = 0;\n' +
+    '    var next = function (i) {\n' +
+    '      if (i >= ids.length) {\n' +
+    '        bulkRetry.disabled = false;\n' +
+    '        selected = {};\n' +
+    '        document.getElementById("formStatus").textContent = "Retried " + done + " job(s) as fresh runs.";\n' +
+    '        jobPage = 1;\n' +
+    '        loadJobs();\n' +
+    '        return;\n' +
+    '      }\n' +
+    '      var info = knownJobs[ids[i]] || {};\n' +
+    '      var body = { sourceUrl: info.sourceUrl, force: true };\n' +
+    '      var scope = info.folderId ? info.folderId : (FOLDER_ID === "none" ? null : FOLDER_ID);\n' +
+    '      if (scope) body.folderId = scope;\n' +
+    '      if (!body.sourceUrl) { next(i + 1); return; }\n' +
+    '      api("/game-imports", {\n' +
+    '        method: "POST",\n' +
+    '        headers: { "Content-Type": "application/json" },\n' +
+    '        body: JSON.stringify(body)\n' +
+    '      }).then(function () { done += 1; next(i + 1); }, function () { next(i + 1); });\n' +
+    '    };\n' +
+    '    next(0);\n' +
+    '  });\n' +
     '  function initFolderTitle() {\n' +
     '    var el = document.getElementById("consoleTitle");\n' +
     '    if (!el) return;\n' +
@@ -841,6 +956,6 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '})();\n' +
     '</script>\n' +
     '</body>\n' +
-    '</html>\n'
-  );
+    '</html>\n';
+  return head + tail;
 }
