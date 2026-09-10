@@ -71,6 +71,7 @@ describe('Game imports integration', () => {
     ['https://partner.example/games/demo-8']: Buffer.from(ENTRY_HTML),
     ['https://partner.example/games/demo-9']: Buffer.from(ENTRY_HTML),
     ['https://partner.example/games/demo-10']: Buffer.from(ENTRY_HTML),
+    ['https://partner.example/games/demo-11']: Buffer.from(ENTRY_HTML),
     ['https://partner.example/games/Build/test.loader.js']:
       Buffer.from(LOADER_JS),
     ['https://partner.example/games/Build/test.data']: Buffer.from(
@@ -353,6 +354,8 @@ describe('Game imports integration', () => {
       expect(res.body.clearedJobs).toBeGreaterThan(0);
       expect(res.body.clearedPackages).toBeGreaterThan(0);
       expect(res.body.clearedWork).toBeGreaterThanOrEqual(0);
+      expect(typeof res.body.stoppedServers).toBe('number');
+      expect(res.body.failedPackages).toEqual([]);
       expect(await jobs.count()).toBe(0);
       expect(fs.readdirSync(storeDir)).toEqual([]);
       expect(fs.readdirSync(workDir)).toEqual([]);
@@ -401,6 +404,34 @@ describe('Game imports integration', () => {
         .expect(200);
       expect(work.body.cleared).toBeGreaterThanOrEqual(1);
       expect(fs.readdirSync(workDir)).toEqual([]);
+    });
+
+    it('clear-packages stops running game servers before deleting', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/game-imports')
+        .send({ sourceUrl: gameUrl(11) })
+        .expect(201);
+      const done = await waitFor(created.body.id, ['completed', 'failed']);
+      expect(done.status).toBe('completed');
+
+      // Start a server for it (mocked launcher, but tracked + persisted).
+      await request(app.getHttpServer())
+        .post(`/game-imports/${created.body.id}/run`)
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .post('/game-imports/settings/clear-packages')
+        .send({ confirm: 'DELETE' })
+        .expect(200);
+      expect(res.body.stoppedServers).toBeGreaterThanOrEqual(1);
+      expect(res.body.failed).toEqual([]);
+      expect(res.body.cleared).toBeGreaterThanOrEqual(1);
+      expect(fs.readdirSync(storeDir)).toEqual([]);
+      // The persisted run row went away with the stop.
+      const servers = testingModule.get<Repository<RunServerEntity>>(
+        getRepositoryToken(RunServerEntity),
+      );
+      await expect(servers.count()).resolves.toBe(0);
     });
   });
 

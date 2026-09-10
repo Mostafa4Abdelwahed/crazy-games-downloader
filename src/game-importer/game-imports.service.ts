@@ -1055,6 +1055,36 @@ export class GameImportsService implements OnModuleInit {
   }
 
   /**
+   * Stop every running local server (live handles first, then any
+   * persisted rows left without one — killed by pid). Used before
+   * destructive maintenance (e.g. clearing packages) because on Windows
+   * a running `python -m http.server` locks its package directory and
+   * makes deletion fail with EBUSY.
+   */
+  async stopAllRuns(): Promise<{ stopped: number }> {
+    let stopped = 0;
+    for (const id of [...this.running.keys()]) {
+      try {
+        const r = await this.stop(id);
+        if (r.stopped) stopped += 1;
+      } catch {
+        /* best-effort per server */
+      }
+    }
+    // Sweep persisted rows that have no live handle (defensive).
+    try {
+      const rows = await this.servers.find();
+      for (const r of rows) {
+        if (r.pid != null) killPid(r.pid);
+      }
+      if (rows.length) await this.servers.clear();
+    } catch {
+      /* best-effort */
+    }
+    return { stopped };
+  }
+
+  /**
    * Reconcile run-server rows left behind by a previous boot: any python
    * process that is still alive AND still answering its recorded port is
    * an orphan of the restart, so it is killed; every row is dropped so

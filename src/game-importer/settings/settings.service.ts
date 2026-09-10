@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Repository } from 'typeorm';
 import { ImportJobEntity } from '../entities/import-job.entity';
+import { GameImportsService } from '../game-imports.service';
 import { dirUsage } from '../storage/disk-usage';
 
 /**
@@ -70,6 +71,7 @@ export class SettingsService {
   constructor(
     @InjectRepository(ImportJobEntity)
     private readonly jobs: Repository<ImportJobEntity>,
+    private readonly games: GameImportsService,
   ) {}
 
   /** Confirmation phrase required by every destructive action. */
@@ -136,20 +138,31 @@ export class SettingsService {
   /**
    * Wipe ALL operational data: every job row, every work directory and
    * every stored package. Irreversible; requires the confirmation phrase.
+   * Running game servers are stopped first so locked package dirs can
+   * actually be deleted.
    */
   async resetAll(confirm: string): Promise<{
     clearedJobs: number;
     clearedWork: number;
     clearedPackages: number;
+    stoppedServers: number;
+    failedPackages: string[];
   }> {
     this.assertConfirmed(confirm);
     const clearedJobs = await this.clearJobsInternal();
     const clearedWork = await this.clearWorkInternal();
-    const clearedPackages = await this.clearPackagesInternal();
+    const pkgs = await this.clearPackagesInternal();
     this.logger.log(
-      `Settings reset-all: ${clearedJobs} jobs, ${clearedWork} work dirs, ${clearedPackages} packages`,
+      `Settings reset-all: ${clearedJobs} jobs, ${clearedWork} work dirs, ` +
+        `${pkgs.cleared} packages (servers stopped: ${pkgs.stoppedServers})`,
     );
-    return { clearedJobs, clearedWork, clearedPackages };
+    return {
+      clearedJobs,
+      clearedWork,
+      clearedPackages: pkgs.cleared,
+      stoppedServers: pkgs.stoppedServers,
+      failedPackages: pkgs.failed,
+    };
   }
 
   /** Delete every job row (packages/work dirs on disk are kept). */
@@ -161,13 +174,23 @@ export class SettingsService {
   /** Delete every temporary work directory (in-flight imports may fail). */
   async clearWork(confirm: string): Promise<{ cleared: number }> {
     this.assertConfirmed(confirm);
-    return { cleared: await this.clearWorkInternal() };
+    return { cleared: (await this.rmDirChildren(this.workRoot())).cleared };
   }
 
-  /** Delete every stored package directory (runnable games are removed). */
-  async clearPackages(confirm: string): Promise<{ cleared: number }> {
+  /**
+   * Delete every stored package directory (runnable games are removed).
+   * Running game servers are stopped first — on Windows a live
+   * `python -m http.server` locks its package dir (EBUSY) and deletion
+   * would otherwise fail. Entries that still fail are reported in
+   * `failed` instead of being silently swallowed.
+   */
+  async clearPackages(confirm: string): Promise<{
+    cleared: number;
+    failed: string[];
+    stoppedServers: number;
+  }> {
     this.assertConfirmed(confirm);
-    return { cleared: await this.clearPackagesInternal() };
+    return this.clearPackagesInternal();
   }
 
   private assertConfirmed(confirm: string): void {
@@ -188,32 +211,58 @@ export class SettingsService {
   }
 
   private async clearWorkInternal(): Promise<number> {
-    return this.rmDirChildren(this.workRoot());
+    return (await this.rmDirChildren(this.workRoot())).cleared;
   }
 
-  private async clearPackagesInternal(): Promise<number> {
-    return this.rmDirChildren(this.storageRoot());
+  private async clearPackagesInternal(): Promise<{
+    cleared: number;
+    failed: string[];
+    stoppedServers: number;
+  }> {
+    let stoppedServers = 0;
+    try {
+      stoppedServers = (await this.games.stopAllRuns()).stopped;
+    } catch (err) {
+      this.logger.warn(
+        `Could not stop running game servers: ${(err as Error).message}`,
+      );
+    }
+    const { cleared, failed } = await this.rmDirChildren(this.storageRoot());
+    for (const f of failed) {
+      this.logger.error(
+        `Could not delete package dir during clear: ${f} ` +
+          `(stop its game server / close handles on it, then retry)`,
+      );
+    }
+    return { cleared, failed, stoppedServers };
   }
 
-  /** Remove every child directory under `root`, returning the count. */
-  private async rmDirChildren(root: string): Promise<number> {
+  /**
+   * Remove every child entry under `root`. Returns the cleared count plus
+   * the names that could NOT be removed (e.g. locked by a live process).
+   */
+  private async rmDirChildren(
+    root: string,
+  ): Promise<{ cleared: number; failed: string[] }> {
     let entries: fs.Dirent[];
     try {
       entries = await fs.promises.readdir(root, { withFileTypes: true });
     } catch {
-      return 0; // missing root -> nothing to clear
+      return { cleared: 0, failed: [] }; // missing root -> nothing to clear
     }
     let cleared = 0;
+    const failed: string[] = [];
     for (const e of entries) {
       const abs = path.resolve(root, e.name);
       try {
         await fs.promises.rm(abs, { recursive: true, force: true });
         cleared += 1;
       } catch (err) {
+        failed.push(e.name);
         this.logger.warn(`Could not remove ${abs}: ${(err as Error).message}`);
       }
     }
-    return cleared;
+    return { cleared, failed };
   }
 
   /** Job/package/work counts + on-disk usage for the stats card. */

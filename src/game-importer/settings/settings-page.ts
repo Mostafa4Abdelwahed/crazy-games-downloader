@@ -392,8 +392,13 @@ export function renderSettingsPage(): string {
     '        .replace("#jobs", r.clearedJobs != null ? r.clearedJobs : (r.cleared != null ? r.cleared : "?"))\n' +
     '        .replace("#workDirs", r.clearedWork != null ? r.clearedWork : (r.cleared != null ? r.cleared : "?"))\n' +
     '        .replace("#packages", r.clearedPackages != null ? r.clearedPackages : (r.cleared != null ? r.cleared : "?"));\n' +
+    '      if (r.stoppedServers) msg += " Stopped " + r.stoppedServers + " running game server(s).";\n' +
+    '      var failed = r.failedPackages || r.failed || [];\n' +
     '      closeConfirm();\n' +
     '      document.getElementById("statusMsg").textContent = msg;\n' +
+    '      document.getElementById("dzError").textContent = failed.length\n' +
+    '        ? ("Could not delete " + failed.length + " package(s) — still in use? Close their game tabs/servers and retry: " + failed.join(", "))\n' +
+    '        : "";\n' +
     '      load();\n' +
     '    }, function (e) {\n' +
     '      btn.disabled = false;\n' +

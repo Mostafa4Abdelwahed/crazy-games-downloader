@@ -16,6 +16,20 @@ function makeRepo(rows: any[] = []) {
   };
 }
 
+function makeGames(stopped = 0) {
+  return {
+    stopAllRuns: jest.fn(async () => ({ stopped })),
+  };
+}
+
+function makeService(repo: Record<string, jest.Mock>, stopped = 0) {
+  const games = makeGames(stopped);
+  return {
+    svc: new SettingsService(repo as never, games as never),
+    games,
+  };
+}
+
 describe('SettingsService', () => {
   let tmpRoot: string;
   let workDir: string;
@@ -52,7 +66,7 @@ describe('SettingsService', () => {
 
   describe('view()', () => {
     it('returns grouped settings with resolved paths and stats', async () => {
-      const svc = new SettingsService(makeRepo(['a', 'b']) as never);
+      const { svc } = makeService(makeRepo(['a', 'b']));
       const v = await svc.view();
       expect(v.queue.driver).toBe('memory');
       expect(v.queue.redisUrl).toBe(false);
@@ -81,7 +95,7 @@ describe('SettingsService', () => {
       process.env.REDIS_URL = 'redis://x';
       process.env.QUEUE_DRIVER = 'bullmq';
       try {
-        const svc = new SettingsService(makeRepo() as never);
+        const { svc } = makeService(makeRepo());
         const v = await svc.view();
         expect(v.database.driver).toBe('postgres');
         expect(v.queue.driver).toBe('bullmq');
@@ -94,7 +108,7 @@ describe('SettingsService', () => {
     });
 
     it('never leaks the redis URL value itself', async () => {
-      const svc = new SettingsService(makeRepo() as never);
+      const { svc } = makeService(makeRepo());
       const raw = JSON.stringify(await svc.view());
       expect(raw).not.toContain('redis://');
     });
@@ -102,7 +116,7 @@ describe('SettingsService', () => {
 
   describe('destructive actions require confirmation', () => {
     it('rejects clear/clear-jobs without the phrase', async () => {
-      const svc = new SettingsService(makeRepo() as never);
+      const { svc } = makeService(makeRepo());
       await expect(svc.clearJobs('')).rejects.toThrow('Type DELETE');
       await expect(svc.clearJobs('delete now')).rejects.toThrow('Type DELETE');
       await expect(svc.clearWork('yes')).rejects.toThrow('Type DELETE');
@@ -111,7 +125,7 @@ describe('SettingsService', () => {
     });
 
     it('accepts the phrase case-insensitively', async () => {
-      const svc = new SettingsService(makeRepo(['x']) as never);
+      const { svc } = makeService(makeRepo(['x']));
       await expect(svc.clearJobs(' delete ')).resolves.toEqual({
         cleared: 1,
       });
@@ -121,7 +135,7 @@ describe('SettingsService', () => {
   describe('clear actions', () => {
     it('clearJobs removes every job row and reports the count', async () => {
       const repo = makeRepo(['a', 'b', 'c']);
-      const svc = new SettingsService(repo as never);
+      const { svc } = makeService(repo);
       await expect(svc.clearJobs('DELETE')).resolves.toEqual({
         cleared: 3,
       });
@@ -129,15 +143,17 @@ describe('SettingsService', () => {
     });
 
     it('clearWork removes every child of the work dir', async () => {
-      const svc = new SettingsService(makeRepo() as never);
+      const { svc } = makeService(makeRepo());
       await expect(svc.clearWork('DELETE')).resolves.toEqual({ cleared: 2 });
       expect(fs.readdirSync(workDir)).toEqual([]);
     });
 
     it('clearPackages removes every stored package', async () => {
-      const svc = new SettingsService(makeRepo() as never);
+      const { svc } = makeService(makeRepo());
       await expect(svc.clearPackages('DELETE')).resolves.toEqual({
         cleared: 1,
+        failed: [],
+        stoppedServers: 0,
       });
       expect(fs.readdirSync(storeDir)).toEqual([]);
     });
@@ -146,10 +162,12 @@ describe('SettingsService', () => {
       process.env.IMPORT_WORK_DIR = path.join(tmpRoot, 'nope');
       process.env.STORAGE_LOCAL_ROOT = path.join(tmpRoot, 'nope2');
       try {
-        const svc = new SettingsService(makeRepo() as never);
+        const { svc } = makeService(makeRepo());
         await expect(svc.clearWork('DELETE')).resolves.toEqual({ cleared: 0 });
         await expect(svc.clearPackages('DELETE')).resolves.toEqual({
           cleared: 0,
+          failed: [],
+          stoppedServers: 0,
         });
       } finally {
         process.env.IMPORT_WORK_DIR = workDir;
@@ -158,14 +176,50 @@ describe('SettingsService', () => {
     });
 
     it('resetAll wipes jobs + work dirs + packages in one go', async () => {
-      const svc = new SettingsService(makeRepo(['a', 'b']) as never);
+      const { svc } = makeService(makeRepo(['a', 'b']));
       await expect(svc.resetAll('DELETE')).resolves.toEqual({
         clearedJobs: 2,
         clearedWork: 2,
         clearedPackages: 1,
+        stoppedServers: 0,
+        failedPackages: [],
       });
       expect(fs.readdirSync(workDir)).toEqual([]);
       expect(fs.readdirSync(storeDir)).toEqual([]);
+    });
+
+    it('clearPackages stops running game servers first', async () => {
+      const { svc, games } = makeService(makeRepo(), 2);
+      const res = await svc.clearPackages('DELETE');
+      expect(games.stopAllRuns).toHaveBeenCalledTimes(1);
+      expect(res.stoppedServers).toBe(2);
+      expect(res.cleared).toBe(1);
+    });
+
+    it('clearPackages reports entries it could not delete', async () => {
+      const { svc } = makeService(makeRepo());
+      const rmSpy = jest
+        .spyOn(fs.promises, 'rm')
+        .mockRejectedValueOnce(new Error('EBUSY: resource busy'));
+      try {
+        const res = await svc.clearPackages('DELETE');
+        expect(res.cleared).toBe(0);
+        expect(res.failed).toEqual(['pkg-1']);
+      } finally {
+        rmSpy.mockRestore();
+      }
+    });
+
+    it('clearPackages still clears when stopping servers throws', async () => {
+      const games = {
+        stopAllRuns: jest.fn(async () => {
+          throw new Error('nope');
+        }),
+      };
+      const svc = new SettingsService(makeRepo() as never, games as never);
+      const res = await svc.clearPackages('DELETE');
+      expect(res.cleared).toBe(1);
+      expect(res.stoppedServers).toBe(0);
     });
   });
 });

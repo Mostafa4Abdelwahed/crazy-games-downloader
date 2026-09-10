@@ -85,6 +85,7 @@ function makeService(repoOverrides: Record<string, jest.Mock> = {}) {
     save: jest.fn(async (e) => e),
     delete: jest.fn(async () => ({ affected: 1 })),
     remove: jest.fn(async (e) => e),
+    clear: jest.fn(async () => undefined),
   };
   const service = new GameImportsService(
     repo as never,
@@ -1100,5 +1101,58 @@ describe('GameImportsService get package size', () => {
     const job = await service.get('job-1');
     expect(job.packageBytes).toBe(0);
     expect(job.packageFiles).toBe(0);
+  });
+});
+
+describe('GameImportsService stopAllRuns', () => {
+  let tmpDir: string;
+  beforeAll(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'cg2-stopall-'));
+  });
+  afterAll(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('stops every live server and drops their rows', async () => {
+    const { service, launchServer, servers } = makeService({
+      findOne: jest.fn(async () =>
+        toEntity({ status: 'completed', packageUrl: tmpDir }),
+      ),
+    });
+    await service.run('job-1');
+    await service.run('job-2');
+    const kids: { kill: jest.Mock }[] = [];
+    for (const r of launchServer.mock.results) {
+      kids.push(((await r.value) as { child: { kill: jest.Mock } }).child);
+    }
+    const res = await service.stopAllRuns();
+    expect(res).toEqual({ stopped: 2 });
+    expect(kids[0].kill).toHaveBeenCalled();
+    expect(kids[1].kill).toHaveBeenCalled();
+    expect(servers.delete).toHaveBeenCalledWith({ jobId: 'job-1' });
+    expect(servers.delete).toHaveBeenCalledWith({ jobId: 'job-2' });
+  });
+
+  it('sweeps persisted rows that have no live handle, killing by pid', async () => {
+    const killSpy = jest
+      .spyOn(process, 'kill')
+      .mockImplementation((() => true) as never);
+    try {
+      const rows = [{ jobId: 'x', port: 1, pid: 4242, url: 'u', root: '/x' }];
+      const { service, servers } = makeService();
+      (servers.find as jest.Mock).mockResolvedValueOnce(rows);
+      const res = await service.stopAllRuns();
+      expect(res).toEqual({ stopped: 0 });
+      expect(killSpy).toHaveBeenCalledWith(4242);
+      expect(servers.clear).toHaveBeenCalledTimes(1);
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it('is a no-op when nothing runs', async () => {
+    const { service, servers } = makeService();
+    await expect(service.stopAllRuns()).resolves.toEqual({ stopped: 0 });
+    expect(servers.clear).not.toHaveBeenCalled();
   });
 });

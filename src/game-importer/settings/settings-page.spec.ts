@@ -41,6 +41,11 @@ describe('settings page', () => {
     expect(html).toContain('/game-imports/settings/clear-packages');
     expect(html).toContain('/game-imports/settings/reset-all');
     expect(html).toContain('JSON.stringify({ confirm: phrase })');
+    // Reports stopped game servers and names packages it could not delete.
+    expect(html).toContain(
+      'Stopped " + r.stoppedServers + " running game server(s).',
+    );
+    expect(html).toContain('Could not delete " + failed.length + " package(s)');
   });
 
   it('links back to the console and marks itself active', () => {
