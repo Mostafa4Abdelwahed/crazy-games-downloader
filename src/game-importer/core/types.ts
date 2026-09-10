@@ -177,6 +177,10 @@ export interface ImportJob {
   /** Sanitized structured diagnostics (M3). */
   diagnostics?: import('./diagnostics').ImportDiagnostic[] | null;
   packageUrl?: string | null;
+  /** On-disk size of the stored package (null when there is no package). */
+  packageBytes?: number | null;
+  /** File count inside the stored package (null when there is none). */
+  packageFiles?: number | null;
   /** Owning folder id (organizational grouping). Null = ungrouped. */
   folderId?: string | null;
   createdAt: string;

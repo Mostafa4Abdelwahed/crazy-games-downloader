@@ -120,16 +120,17 @@ export function renderConsolePage(folderId: string = 'none'): string {
     'html,body{margin:0;padding:0}\n' +
     '*,*::before,*::after{box-sizing:border-box}\n' +
     'body{font-family:"Nunito","Quicksand",ui-rounded,system-ui,-apple-system,"Segoe UI",sans-serif;background:radial-gradient(1100px 420px at 50% -10%,var(--glow),transparent 62%),var(--canvas);color:var(--text);line-height:1.55;font-size:14px;min-height:100vh}\n' +
-    '.appbar{display:flex;align-items:center;gap:14px;padding:14px 22px;position:sticky;top:0;z-index:5;background:var(--glass-bg);-webkit-backdrop-filter:blur(14px) saturate(150%);backdrop-filter:blur(14px) saturate(150%);border-bottom:1px solid var(--glass-edge);box-shadow:0 1px 0 var(--glass-hi) inset,var(--glass-shadow)}\n' +
-    '@media (max-width:640px){.appbar{padding:12px 16px;gap:10px}.appbar p{display:none}}\n' +
-    '.logo{display:grid;place-items:center;width:42px;height:42px;border-radius:22px;background:var(--brand);color:#fff;font-size:1.25rem;box-shadow:0 0 0 1px rgba(104,66,255,.4),0 8px 24px rgba(104,66,255,.35)}\n' +
-    '.logo svg{width:26px;height:26px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}\n' +
+    '.appbar{display:flex;align-items:center;gap:12px;padding:12px 22px;position:sticky;top:0;z-index:5;background:var(--glass-bg);-webkit-backdrop-filter:blur(14px) saturate(150%);backdrop-filter:blur(14px) saturate(150%);border-bottom:1px solid var(--glass-edge);box-shadow:0 1px 0 var(--glass-hi) inset,var(--glass-shadow)}\n' +
+    '@media (max-width:640px){.appbar{padding:10px 14px;gap:8px}.appbar p{display:none}}\n' +
+    '.logo{display:grid;place-items:center;width:38px;height:38px;border-radius:20px;background:var(--brand);color:#fff;font-size:1.25rem;box-shadow:0 0 0 1px rgba(104,66,255,.4),0 8px 24px rgba(104,66,255,.35);flex:none}\n' +
+    '.logo svg{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}\n' +
     '.btn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}\n' +
     '.appbar h1{margin:0;font-size:1.2rem;font-weight:800}\n' +
     '.appbar p{margin:0;font-size:.85rem;color:var(--text-2);opacity:.85}\n' +
     'main{padding:22px 22px 56px}\n' +
-    '.card{background:var(--surface);border:1px solid var(--divider);border-radius:var(--radius-card);box-shadow:var(--shadow-1);padding:20px;margin:16px 0}\n' +
-    '.section-title{margin:0 0 14px;font-size:.75rem;font-weight:800;color:var(--brand-soft);text-transform:uppercase;letter-spacing:.12em}\n' +
+    '.card{background:var(--surface);border:1px solid var(--divider);border-radius:var(--radius-card);box-shadow:var(--shadow-1);padding:22px;margin:16px 0}\n' +
+    '.section-title{margin:14px 0 14px;font-size:.75rem;font-weight:800;color:var(--brand-soft);text-transform:uppercase;letter-spacing:.12em;display:flex;align-items:center;gap:8px}\n' +
+    '.section-title::before{content:"";width:8px;height:8px;border-radius:3px;background:var(--brand);flex:none}\n' +
     '.field{width:100%;border:1px solid var(--divider);border-radius:var(--radius-med);padding:12px 14px;font:inherit;background:var(--surface-raised);color:var(--text);resize:vertical}\n' +
     '.field::placeholder{color:var(--text-3)}\n' +
     '.field:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px rgba(104,66,255,.28)}\n' +
@@ -157,13 +158,16 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '.nav-tabs a svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}\n' +
     '@media (max-width:860px){.nav-tabs a span{display:none}.nav-tabs a{padding:8px 12px}}\n' +
     '.theme-btn svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}\n' +
+    '.btn:focus-visible,.field:focus-visible,.theme-btn:focus-visible,.copy-btn:focus-visible{outline:2px solid var(--brand);outline-offset:2px}\n' +
     '.table-wrap{overflow-x:auto;border-radius:var(--radius-med);border:1px solid var(--divider);background:var(--canvas)}\n' +
-    'table{border-collapse:collapse;width:100%;font-size:.88rem}\n' +
-    'th{text-align:left;padding:12px 14px;background:var(--surface-raised);color:var(--brand-soft);font-weight:800;font-size:.72rem;text-transform:uppercase;letter-spacing:.1em;white-space:nowrap}\n' +
-    'td{padding:12px 14px;border-top:1px solid var(--divider);vertical-align:top;color:var(--text-2);overflow-wrap:anywhere}\n' +
-    'tr.job{cursor:pointer;transition:background .12s}\n' +
-    'tr.job:hover{background:var(--surface-tint)}\n' +
-    'tr.job.sel{background:var(--sel-bg)}\n' +
+    'table{border-collapse:separate;border-spacing:0;width:100%;font-size:.88rem}\n' +
+    'th{text-align:left;padding:11px 14px;background:var(--surface-raised);color:var(--brand-soft);font-weight:800;font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;white-space:nowrap;position:sticky;top:0}\n' +
+    'td{padding:11px 14px;border-top:1px solid var(--divider);vertical-align:middle;color:var(--text-2);overflow-wrap:anywhere}\n' +
+    'tbody tr.job{cursor:pointer;transition:background .12s}\n' +
+    'tbody tr.job:hover{background:var(--surface-tint)}\n' +
+    'tbody tr.job.sel{background:var(--sel-bg)}\n' +
+    'tbody tr.job.sel td:first-child{box-shadow:inset 3px 0 0 var(--brand)}\n' +
+    'td.src{max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}\n' +
     '.pill{display:inline-block;padding:3px 12px;border-radius:999px;font-size:.74rem;font-weight:800;letter-spacing:.03em;white-space:nowrap;border:1px solid transparent}\n' +
     '.queued,.detecting,.resolving,.downloading,.extracting,.validating,.uploading{background:var(--queued-bg);color:var(--queued-fg);border-color:var(--queued-bd)}\n' +
     '.completed{background:var(--ok-bg);color:var(--ok-fg);border-color:var(--ok-bd)}\n' +
@@ -186,8 +190,28 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '.muted{color:var(--text-3);font-size:.85rem;overflow-wrap:anywhere}\n' +
     '.row>span,.row>code{min-width:0}\n' +
     '.detail-kv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 16px;margin-top:10px;font-size:.9rem}\n' +
-    '.detail-kv b{color:var(--brand-soft);font-weight:800;font-size:.74rem;text-transform:uppercase;letter-spacing:.08em;padding-top:2px}\n' +
-    '.detail-kv>span{min-width:0;overflow-wrap:anywhere}\n' +
+    '.d-head{display:flex;align-items:flex-start;gap:10px}\n' +
+    '.d-title{flex:1;min-width:0;margin:0;font-size:1.05rem;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}\n' +
+    '.d-title code{font-size:.78rem}\n' +
+    '.d-url{color:var(--text-3);font-size:.8rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}\n' +
+    '.d-progress{display:flex;align-items:center;gap:10px;margin-top:12px}\n' +
+    '.d-progress .bar{flex:1;margin:0}\n' +
+    '.d-progress>span{font-size:.8rem;font-weight:800;color:var(--brand-soft);min-width:38px;text-align:right}\n' +
+    '.d-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px}\n' +
+    '.d-stat{background:var(--surface-raised);border:1px solid var(--divider);border-radius:var(--radius-sm);padding:8px 10px;min-width:0}\n' +
+    '.d-stat small{display:block;font-size:.66rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--text-3)}\n' +
+    '.d-stat b{font-size:.85rem;overflow-wrap:anywhere}\n' +
+    '.d-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}\n' +
+    '.d-actions .btn{padding:9px 20px;font-size:.85rem}\n' +
+    '@media (max-width:480px){.d-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}\n' +
+    '.collapsible{margin-top:14px;border:1px solid var(--divider);border-radius:var(--radius-med);background:var(--surface-raised)}\n' +
+    '.collapsible>summary{cursor:pointer;padding:10px 14px;font-size:.75rem;font-weight:800;color:var(--brand-soft);text-transform:uppercase;letter-spacing:.12em;list-style:none;display:flex;align-items:center;gap:8px;user-select:none}\n' +
+    '.collapsible>summary::-webkit-details-marker{display:none}\n' +
+    '.collapsible>summary::marker{content:""}\n' +
+    '.collapsible .arrow{width:0;height:0;border-top:5px solid transparent;border-bottom:5px solid transparent;border-left:7px solid var(--brand-soft);transition:transform .15s;flex:none}\n' +
+    'details.collapsible[open] .arrow{transform:rotate(90deg)}\n' +
+    '.collapsible-body{padding:0 14px 14px}\n' +
+    '.collapsible-body table{margin:0}\n' +
     '.row .field{flex:1;width:auto;min-width:180px}\n' +
     '.modal{position:fixed;inset:0;z-index:50;display:grid;place-items:center;padding:20px;background:rgba(10,11,18,.55);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}\n' +
     '.modal[hidden]{display:none}\n' +
@@ -210,6 +234,8 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '.pager-size{display:inline-flex;align-items:center;font-size:.82rem;white-space:nowrap}\n' +
     '.pager .btn:disabled{cursor:not-allowed}\n' +
     '.workbench{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(320px,1fr);gap:16px;align-items:start;margin:16px 0}\n' +
+    '.add-grid{display:grid;grid-template-columns:1.2fr 1fr;gap:16px;align-items:stretch;margin:16px 0}\n' +
+    '.add-grid .card{margin:0}\n' +
     '.filters{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 14px}\n' +
     '.filter-sel{width:auto;min-width:150px;padding:9px 12px;font-size:.85rem}\n' +
     '.filters .btn{padding:9px 18px;font-size:.85rem}\n' +
@@ -217,15 +243,17 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '.search-wrap svg{position:absolute;left:12px;width:16px;height:16px;stroke:var(--text-3);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}\n' +
     '.search-wrap .field{padding-left:36px;font-size:.85rem}\n' +
     '.search-wrap .field::-webkit-search-cancel-button{cursor:pointer}\n' +
-    '.bulkbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 14px}\n' +
+    '.bulkbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 0 14px}\n' +
     '.bulkbar[hidden]{display:none}\n' +
     '.bulkbar .btn{padding:9px 18px;font-size:.85rem}\n' +
     'input[type=checkbox].rowSel{width:16px;height:16px;accent-color:var(--brand);cursor:pointer;vertical-align:middle}\n' +
     '.workbench .card{margin:0}\n' +
-    '.workbench-right{position:sticky;top:86px;max-height:calc(100vh - 106px);display:flex;flex-direction:column;overflow:hidden}\n' +
+    '.workbench-right{position:sticky;top:78px;max-height:calc(100vh - 98px);display:flex;flex-direction:column;overflow:hidden}\n' +
     '.workbench-right #detail{overflow-y:auto;min-height:200px}\n' +
     '.workbench-right #detail.muted{padding:12px 4px}\n' +
-    '@media (max-width:980px){.workbench{grid-template-columns:1fr}.workbench-right{position:static;max-height:none}}\n' +
+    '@media (max-width:980px){.workbench{grid-template-columns:1fr}.workbench-right{position:static;max-height:none}.add-grid{grid-template-columns:1fr}}\n' +
+    '@media (max-width:720px){.jobs-table th:nth-child(6),.jobs-table td:nth-child(6){display:none}}\n' +
+    '@media (max-width:640px){main{padding:16px 12px 48px}.card{padding:16px}.search-wrap{flex:1 1 100%}.filter-sel{flex:1 1 auto}td{padding:9px 10px}th{padding:9px 10px}.d-actions .btn{flex:1 1 auto}}\n' +
     '</style>\n' +
     '</head>\n' +
     '<body>\n' +
@@ -244,6 +272,7 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '</button>\n' +
     '</header>\n' +
     '<main>\n' +
+    '<div class="add-grid">\n' +
     '<section class="card">\n' +
     '<h2 class="section-title">Add games</h2>\n' +
     '<form id="startForm">\n' +
@@ -265,6 +294,7 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '<div id="discoverStatus" class="muted"></div>\n' +
     '<div id="discoverError" class="err"></div>\n' +
     '</section>\n' +
+    '</div>\n' +
     '<div class="workbench">\n' +
     '<section class="card workbench-left">\n' +
     '<h2 class="section-title">Jobs</h2>\n' +
@@ -297,7 +327,7 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '<button id="retryFailedBtn" class="btn ghost" type="button" title="Re-run every failed game in this folder as a fresh forced run"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>Retry failed</button>\n' +
     '</div>\n' +
     '<div class="table-wrap">\n' +
-    '<table><thead><tr><th><input type="checkbox" id="selAll" class="rowSel" title="Select all on this page" aria-label="Select all on this page"></th><th>#</th><th>Source</th><th>Status</th><th>Progress</th><th>Updated</th></tr></thead>\n' +
+    '<table class="jobs-table"><thead><tr><th><input type="checkbox" id="selAll" class="rowSel" title="Select all on this page" aria-label="Select all on this page"></th><th>#</th><th>Source</th><th>Status</th><th>Progress</th><th>Updated</th></tr></thead>\n' +
     '<tbody id="jobRows"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody></table>\n' +
     '</div>\n' +
     '<div id="bulkBar" class="bulkbar" hidden>\n' +
@@ -387,6 +417,14 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\\\"": "&quot;", "\\u0027": "&#39;" }[c];\n' +
     '    });\n' +
     '  }\n' +
+    '  function fmtBytes(v) {\n' +
+    '    var n = Number(v);\n' +
+    '    if (!isFinite(n) || n < 0) return "—";\n' +
+    '    if (n >= 1073741824) return (n / 1073741824).toFixed(1) + " GiB";\n' +
+    '    if (n >= 1048576) return (n / 1048576).toFixed(1) + " MiB";\n' +
+    '    if (n >= 1024) return (n / 1024).toFixed(1) + " KiB";\n' +
+    '    return n + " B";\n' +
+    '  }\n' +
     '  function api(path, opts) {\n' +
     '    return fetch(path, opts).then(function (r) {\n' +
     '      if (!r.ok) return r.json().catch(function () { return {}; }).then(function (b) {\n' +
@@ -395,7 +433,6 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '      return r.json();\n' +
     '    });\n' +
     '  }\n' +
-    '  function shortId(id) { return esc(String(id).slice(0, 8)); }\n' +
     '  function jobsQuery() {\n' +
     '    var q = "?page=" + jobPage + "&limit=" + jobPageSize + "&folderId=" + encodeURIComponent(FOLDER_ID) +\n' +
     '      "&sort=" + encodeURIComponent(jobSortKey) + "&dir=" + jobSortDir;\n' +
@@ -418,7 +455,7 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '        html += "<tr class=\\"job" + (j.id === selectedId ? " sel" : "") + "\\" data-id=\\"" + esc(j.id) + "\\">" +\n' +
     '          "<td><input type=\\"checkbox\\" class=\\"rowSel\\" data-id=\\"" + esc(j.id) + "\\"" + (selected[j.id] ? " checked" : "") + " aria-label=\\"Select job\\"></td>" +\n' +
     '          "<td><code>#" + (j.seq != null ? esc(j.seq) : "?") + "</code></td>" +\n' +
-    '          "<td>" + esc(j.sourceUrl) + "</td>" +\n' +
+    '          "<td class=\\"src\\" title=\\"" + esc(j.sourceUrl) + "\\">" + esc(j.sourceUrl) + "</td>" +\n' +
     '          "<td><span class=\\"pill " + esc(j.status) + "\\">" + esc(j.status) + "</span></td>" +\n' +
     '          "<td>" + esc(j.progress) + "%</td>" +\n' +
     '          "<td class=\\"muted\\">" + esc(j.updatedAt) + "</td></tr>";\n' +
@@ -567,17 +604,35 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '      legacy();\n' +
     '    }\n' +
     '  }\n' +
+    '  function gameName(url) {\n' +
+    '    try {\n' +
+    '      var parts = String(url || "").split("?")[0].split("#")[0].split("/").filter(function (p) { return p; });\n' +
+    '      var slug = parts.pop() || "game";\n' +
+    '      slug = slug.replace(/\\.(html?|php|aspx?)$/i, "").replace(/[-_]+/g, " ").trim();\n' +
+    '      slug = slug.replace(/\\b\\w/g, function (c) { return c.toUpperCase(); });\n' +
+    '      return slug.slice(0, 60) || "Game";\n' +
+    '    } catch (e) { return "Game"; }\n' +
+    '  }\n' +
+    '  function fmtDate(iso) {\n' +
+    '    try {\n' +
+    '      var d = new Date(iso);\n' +
+    '      if (isNaN(d.getTime())) return String(iso || "—");\n' +
+    '      return d.toLocaleString();\n' +
+    '    } catch (e) { return String(iso || "—"); }\n' +
+    '  }\n' +
     '  function renderDetail(j, logs) {\n' +
     '    var el = document.getElementById("detail");\n' +
-    '    var html = "<div class=\\"row\\" style=\\"margin-top:0\\"><span class=\\"pill " + esc(j.status) + "\\">" + esc(j.status) + "</span> " +\n' +
-    '      "<code>" + esc(j.id) + "</code></div>" +\n' +
-    '      "<div class=\\"detail-kv\\">" +\n' +
-    '      "<b>Source</b><span>" + esc(j.sourceUrl) + "</span>" +\n' +
-    '      "<b>Step</b><span>" + esc(j.currentStep) + "</span>" +\n' +
-    '      "<b>Engine</b><span>" + esc(j.detectedEngine || "—") + "</span>" +\n' +
-    '      "<b>Files</b><span>" + esc(j.downloadedFiles) + " / " + esc(j.totalFiles) + "</span>" +\n' +
-    '      "</div>" +\n' +
-    '      "<div class=\\"bar\\"><i style=\\"width:" + esc(j.progress) + "%\\"></i></div>";\n' +
+    '    var html = "<div class=\\"d-head\\">" +\n' +
+    '      "<div class=\\"d-title\\">" + esc(gameName(j.sourceUrl)) + " <code>#" + (j.seq != null ? esc(j.seq) : "?") + "</code></div>" +\n' +
+    '      "<span class=\\"pill " + esc(j.status) + "\\">" + esc(j.status) + "</span></div>" +\n' +
+    '      "<div class=\\"d-url\\" title=\\"" + esc(j.sourceUrl) + "\\">" + esc(j.sourceUrl) + "</div>" +\n' +
+    '      "<div class=\\"d-progress\\"><div class=\\"bar\\"><i style=\\"width:" + esc(j.progress) + "%\\"></i></div><span>" + esc(j.progress) + "%</span></div>" +\n' +
+    '      "<div class=\\"d-stats\\">" +\n' +
+    '      "<div class=\\"d-stat\\"><small>Size</small><b>" + (j.packageBytes != null ? fmtBytes(j.packageBytes) + (j.packageFiles != null ? " (" + esc(j.packageFiles) + " files)" : "") : "—") + "</b></div>" +\n' +
+    '      "<div class=\\"d-stat\\"><small>Engine</small><b>" + esc(j.detectedEngine || "—") + "</b></div>" +\n' +
+    '      "<div class=\\"d-stat\\"><small>Files</small><b>" + esc(j.downloadedFiles) + " / " + esc(j.totalFiles) + "</b></div>" +\n' +
+    '      "<div class=\\"d-stat\\"><small>Updated</small><b>" + esc(fmtDate(j.updatedAt)) + "</b></div>" +\n' +
+    '      "</div>";\n' +
     '    if (j.status === "failed") {\n' +
     '      html += "<p class=\\"err\\"><strong>Failed" + (j.errorCode ? " (" + esc(j.errorCode) + ")" : "") + ":</strong> " + esc(j.error) + "</p>";\n' +
     '      if (j.packageUrl) html += "<p><strong>Partial package:</strong> <code>" + esc(j.packageUrl) + "</code></p>";\n' +
@@ -586,15 +641,15 @@ export function renderConsolePage(folderId: string = 'none'): string {
     '      html += "<p class=\\"ok\\"><strong>Package:</strong> <code>" + esc(j.packageUrl) + "</code></p>" + runHelp(j.packageUrl, j.id);\n' +
     '    }\n' +
     '    if (["failed", "completed", "cancelled"].indexOf(j.status) >= 0) {\n' +
-    '      html += "<p><button id=\\"reimportBtn\\" class=\\"btn ghost\\"><svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><path d=\\"M23 4v6h-6\\"/><path d=\\"M20.49 15a9 9 0 1 1-2.12-9.36L23 10\\"/></svg>Re-import</button> <span class=\\"muted\\">Forces a fresh run even though this game already exists.</span></p>";\n' +
-    '    }\n' +
-    '    if (["failed", "completed", "cancelled"].indexOf(j.status) >= 0) {\n' +
-    '      html += "<p><button id=\\"deleteJobBtn\\" class=\\"btn danger\\"><svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><polyline points=\\"3 6 5 6 21 6\\"/><path d=\\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\\"/></svg>Delete job</button> <span class=\\"muted\\">Removes the job and its package from disk.</span></p>";\n' +
+    '      html += "<div class=\\"d-actions\\">" +\n' +
+    '        "<button id=\\"reimportBtn\\" class=\\"btn ghost\\"><svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><path d=\\"M23 4v6h-6\\"/><path d=\\"M20.49 15a9 9 0 1 1-2.12-9.36L23 10\\"/></svg>Re-import</button>" +\n' +
+    '        "<button id=\\"deleteJobBtn\\" class=\\"btn danger\\"><svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><polyline points=\\"3 6 5 6 21 6\\"/><path d=\\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\\"/></svg>Delete</button></div>";\n' +
     '    }\n' +
     '    if (["queued", "detecting", "resolving", "downloading", "extracting", "validating", "uploading"].indexOf(j.status) >= 0) {\n' +
-    '      html += "<p><button id=\\"cancelBtn\\" class=\\"btn light\\">Cancel job</button></p>";\n' +
+    '      html += "<div class=\\"d-actions\\"><button id=\\"cancelBtn\\" class=\\"btn light\\">Cancel job</button></div>";\n' +
     '    }\n' +
-    '    html += "<h3 class=\\"section-title\\">Diagnostics</h3>" + diagList(j.diagnostics);\n' +
+    '    html += "<details class=\\"collapsible\\"><summary><span class=\\"arrow\\"></span>Diagnostics (" + ((j.diagnostics || []).length) + ")</summary>" +\n' +
+    '      "<div class=\\"collapsible-body\\">" + diagList(j.diagnostics) + "</div></details>";\n' +
     '    html += "<h3 class=\\"section-title\\">Logs</h3><pre>" + esc((logs || []).map(function (l) { return l.at + " [" + l.level + "] " + l.message; }).join("\\n")) + "</pre>";\n' +
     '    el.innerHTML = html;\n' +
     '    el.classList.remove("muted");\n' +

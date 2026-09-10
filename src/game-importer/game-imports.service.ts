@@ -20,6 +20,7 @@ import { ImportQueueService } from './queue/import.queue';
 import { ImportJob, ImportJobLogEntry, ImportState } from './core/types';
 import { DiagnosticLevel, ImportDiagnostic } from './core/diagnostics';
 import { SourceRegistry } from './sources/source-registry';
+import { dirUsage } from './storage/disk-usage';
 import { FoldersService } from './folders/folders.service';
 import {
   ListedGamesResult,
@@ -295,6 +296,8 @@ function toJob(e: ImportJobEntity): ImportJob {
     errorCode: e.errorCode ?? null,
     diagnostics: toDiagnostics(e.diagnostics),
     packageUrl: e.packageUrl,
+    packageBytes: null,
+    packageFiles: null,
     folderId: e.folderId ?? null,
     createdAt: e.createdAt?.toISOString?.() ?? new Date().toISOString(),
     updatedAt: e.updatedAt?.toISOString?.() ?? new Date().toISOString(),
@@ -671,7 +674,15 @@ export class GameImportsService implements OnModuleInit {
   async get(id: string): Promise<ImportJob> {
     const e = await this.jobs.findOne({ where: { id } });
     if (!e) throw new NotFoundException(`Import job not found: ${id}`);
-    return toJob(e);
+    const job = toJob(e);
+    // On-demand size of this game's stored package (single dir walk;
+    // the listing stays light and never pays for it).
+    if (e.packageUrl) {
+      const usage = await dirUsage(e.packageUrl);
+      job.packageBytes = usage.bytes;
+      job.packageFiles = usage.files;
+    }
+    return job;
   }
 
   /**

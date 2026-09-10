@@ -1053,3 +1053,52 @@ describe('GameImportsService importBackup', () => {
     expect(res.gamesSkipped).toBe(0);
   });
 });
+
+describe('GameImportsService get package size', () => {
+  let pkgDir: string;
+  beforeAll(async () => {
+    pkgDir = await mkdtemp(path.join(os.tmpdir(), 'cg2-size-'));
+    await mkdir(path.join(pkgDir, 'Build'), { recursive: true });
+    await writeFile(path.join(pkgDir, 'index.html'), Buffer.alloc(100));
+    await writeFile(path.join(pkgDir, 'Build', 'game.wasm'), Buffer.alloc(200));
+  });
+  afterAll(async () => {
+    await rm(pkgDir, { recursive: true, force: true });
+  });
+
+  it('reports on-disk bytes and file count for a stored package', async () => {
+    const { service } = makeService({
+      findOne: jest.fn(async () =>
+        toEntity({ status: 'completed', packageUrl: pkgDir }),
+      ),
+    });
+    const job = await service.get('job-1');
+    expect(job.packageBytes).toBe(300);
+    expect(job.packageFiles).toBe(2);
+  });
+
+  it('reports null size when there is no package', async () => {
+    const { service } = makeService({
+      findOne: jest.fn(async () =>
+        toEntity({ status: 'failed', packageUrl: null }),
+      ),
+    });
+    const job = await service.get('job-1');
+    expect(job.packageBytes).toBeNull();
+    expect(job.packageFiles).toBeNull();
+  });
+
+  it('reports zero for a package directory that went missing', async () => {
+    const { service } = makeService({
+      findOne: jest.fn(async () =>
+        toEntity({
+          status: 'completed',
+          packageUrl: path.join(pkgDir, 'gone'),
+        }),
+      ),
+    });
+    const job = await service.get('job-1');
+    expect(job.packageBytes).toBe(0);
+    expect(job.packageFiles).toBe(0);
+  });
+});

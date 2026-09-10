@@ -183,6 +183,9 @@ describe('Game imports integration', () => {
       .expect(200);
     expect(got.body.detectedEngine).toBe('unity');
     expect(got.body.progress).toBe(100);
+    // …plus the on-disk size of the stored package.
+    expect(got.body.packageBytes).toBeGreaterThan(0);
+    expect(got.body.packageFiles).toBeGreaterThan(0);
   });
 
   it('exposes logs', async () => {

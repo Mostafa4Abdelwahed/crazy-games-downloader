@@ -339,4 +339,74 @@ describe('management console page', () => {
       '--glass-shadow:0 10px 30px -22px rgba(31,34,60,.35)',
     );
   });
+
+  it('shows the game size in the details panel', () => {
+    const html = renderConsolePage();
+    // Size tile next to Engine/Files/Updated, human-formatted with a count.
+    expect(html).toContain('d-stats');
+    expect(html).toContain('<small>Size</small>');
+    expect(html).toContain('fmtBytes(j.packageBytes)');
+    expect(html).toContain('" files)"');
+    expect(html).toContain('function fmtBytes(v)');
+    expect(html).toContain('gameName(j.sourceUrl)');
+  });
+
+  it('renders Diagnostics as a collapsed section with a count', () => {
+    const html = renderConsolePage();
+    // Native <details> toggle: collapsed by default, count in the header.
+    expect(html).toContain('class=\\"collapsible\\"');
+    expect(html).toContain(
+      'Diagnostics (" + ((j.diagnostics || []).length) + ")',
+    );
+    expect(html).toContain('collapsible-body');
+    // Logs stay a plain always-visible section.
+    expect(html).toContain('>Logs</h3><pre>');
+    expect(html).not.toContain('Diagnostics</h3>');
+  });
+
+  it('lays Add and Discover side by side on desktop, stacked on mobile', () => {
+    const html = renderConsolePage();
+    expect(html).toContain('class="add-grid"');
+    expect(html).toContain(
+      '.add-grid{display:grid;grid-template-columns:1.2fr 1fr',
+    );
+    expect(html).toContain(
+      '@media (max-width:980px){.workbench{grid-template-columns:1fr}',
+    );
+    expect(html).toContain('.add-grid{grid-template-columns:1fr}');
+  });
+
+  it('renders details as a titled card with stat tiles and grouped actions', () => {
+    const html = renderConsolePage();
+    // Title derived from the URL + seq, full URL truncated below.
+    expect(html).toContain('function gameName(url)');
+    expect(html).toContain('class=\\"d-head\\"');
+    expect(html).toContain('class=\\"d-url\\"');
+    // Progress hero with a live percent label.
+    expect(html).toContain('class=\\"d-progress\\"');
+    // Four stat tiles: Size, Engine, Files, Updated.
+    expect(html).toContain('class=\\"d-stats\\"');
+    expect(html).toContain('<small>Engine</small>');
+    expect(html).toContain('<small>Updated</small>');
+    // One actions row instead of scattered paragraphs.
+    expect(html).toContain('class=\\"d-actions\\"');
+    expect(html).toContain('id=\\"reimportBtn\\"');
+    expect(html).toContain('id=\\"deleteJobBtn\\"');
+    expect(html).toContain('id=\\"cancelBtn\\"');
+  });
+
+  it('adapts to small screens without horizontal breakage', () => {
+    const html = renderConsolePage();
+    // Updated column hides on narrow screens; search goes full-width.
+    expect(html).toContain('class="jobs-table"');
+    expect(html).toContain(
+      '.jobs-table th:nth-child(6),.jobs-table td:nth-child(6){display:none}',
+    );
+    expect(html).toContain('.search-wrap{flex:1 1 100%}');
+    // Long source URLs truncate with ellipsis instead of blowing the row.
+    expect(html).toContain('td.src{');
+    expect(html).toContain('text-overflow:ellipsis');
+    // Keyboard users get a visible focus ring.
+    expect(html).toContain(':focus-visible');
+  });
 });
