@@ -69,8 +69,15 @@ function makeService(repoOverrides: Record<string, jest.Mock> = {}) {
   const launchServer = jest.fn(async () => ({
     url: 'http://localhost:54321/',
     port: 54321,
-    child: { kill: jest.fn() },
+    child: { kill: jest.fn(), pid: 4242 },
   }));
+  const servers = {
+    find: jest.fn(async () => []),
+    findOne: jest.fn(async () => null),
+    save: jest.fn(async (e) => e),
+    delete: jest.fn(async () => ({ affected: 1 })),
+    remove: jest.fn(async (e) => e),
+  };
   const service = new GameImportsService(
     repo as never,
     policy as never,
@@ -79,8 +86,18 @@ function makeService(repoOverrides: Record<string, jest.Mock> = {}) {
     folders as never,
     jest.fn(() => null) as never,
     launchServer as never,
+    servers as never,
   );
-  return { service, repo, policy, queue, sources, folders, launchServer };
+  return {
+    service,
+    repo,
+    policy,
+    queue,
+    sources,
+    folders,
+    launchServer,
+    servers,
+  };
 }
 
 describe('GameImportsService dedup + batch', () => {
@@ -800,5 +817,146 @@ describe('GameImportsService retryFailed', () => {
       jobs: [],
       duplicates: [],
     });
+  });
+});
+
+describe('GameImportsService run-server persistence', () => {
+  let tmpDir: string;
+  beforeAll(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'cg2-run-'));
+  });
+  afterAll(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function completedService(entityOverrides: Record<string, unknown> = {}) {
+    return makeService({
+      findOne: jest.fn(async () =>
+        toEntity({
+          status: 'completed',
+          packageUrl: tmpDir,
+          ...entityOverrides,
+        }),
+      ),
+    });
+  }
+
+  it('persists a run row on Start and drops it on Stop', async () => {
+    const { service, servers } = completedService();
+    await service.run('job-1');
+    expect(servers.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jobId: 'job-1',
+        port: 54321,
+        pid: 4242,
+        url: 'http://localhost:54321/',
+      }),
+    );
+    await service.stop('job-1');
+    expect(servers.delete).toHaveBeenCalledWith({ jobId: 'job-1' });
+  });
+
+  it('stop falls back to the persisted row when the live handle is gone', async () => {
+    const killSpy = jest
+      .spyOn(process, 'kill')
+      .mockImplementation((() => true) as never);
+    try {
+      const row = {
+        jobId: 'job-9',
+        port: 54321,
+        pid: 9999,
+        url: 'http://localhost:54321/',
+        root: tmpDir,
+      };
+      const { service, servers } = makeService({
+        findOne: jest.fn(async () => null),
+      });
+      (servers.findOne as jest.Mock).mockResolvedValueOnce(row);
+      const res = await service.stop('job-9');
+      expect(res).toEqual({ url: 'http://localhost:54321/', stopped: true });
+      expect(killSpy).toHaveBeenCalledWith(9999);
+      expect(servers.delete).toHaveBeenCalledWith({ jobId: 'job-9' });
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it('remove() also drops the persisted run row', async () => {
+    const entity = toEntity({
+      id: 'job-1',
+      status: 'completed',
+      packageUrl: tmpDir,
+    });
+    const { service, servers } = makeService({
+      findOne: jest.fn(async () => entity),
+    });
+    (servers.findOne as jest.Mock).mockResolvedValueOnce({
+      jobId: 'job-1',
+      port: 54321,
+      pid: null,
+      url: 'http://localhost:54321/',
+      root: tmpDir,
+    });
+    const res = await service.remove('job-1');
+    expect(res.wasRunning).toBe(true);
+    expect(servers.delete).toHaveBeenCalledWith({ jobId: 'job-1' });
+  });
+
+  it('reconcile kills orphans whose port still answers, forgets the rest', async () => {
+    const net = await import('node:net');
+    // A real listener = the "port still answers" case.
+    const srv: import('node:net').Server = net.createServer();
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+    const openPort = (srv.address() as import('node:net').AddressInfo).port;
+    // A just-closed listener = a guaranteed-closed port.
+    const closed: import('node:net').Server = net.createServer();
+    await new Promise<void>((r) => closed.listen(0, '127.0.0.1', r));
+    const closedPort = (closed.address() as import('node:net').AddressInfo)
+      .port;
+    await new Promise<void>((r) => closed.close(() => r()));
+    const rows = [
+      { jobId: 'a', port: openPort, pid: 1111, url: 'u1', root: '/x' },
+      { jobId: 'b', port: closedPort, pid: 2222, url: 'u2', root: '/y' },
+      { jobId: 'c', port: closedPort, pid: 3333, url: 'u3', root: '/z' },
+    ];
+    // pid 3333 is dead; the others look alive.
+    const killSpy = jest.spyOn(process, 'kill').mockImplementation(((
+      pid: number,
+      signal?: string | number,
+    ) => {
+      if (signal === 0 && pid === 3333) {
+        const e = new Error('ESRCH') as NodeJS.ErrnoException;
+        e.code = 'ESRCH';
+        throw e;
+      }
+      return true;
+    }) as never);
+    try {
+      const removed: unknown[] = [];
+      const { service, servers } = makeService();
+      (servers.find as jest.Mock).mockResolvedValueOnce(rows);
+      (servers.remove as jest.Mock).mockImplementation(async (e: unknown) => {
+        removed.push(e);
+        return e;
+      });
+      const res = await service.reconcileRunServers();
+      expect(res).toEqual({ killed: 1, cleared: 3 });
+      expect(removed).toHaveLength(3);
+      // Only the orphan whose port still answers gets a real kill signal.
+      const kills = killSpy.mock.calls.filter((c) => c[1] === undefined);
+      expect(kills).toEqual([[1111]]);
+    } finally {
+      killSpy.mockRestore();
+      await new Promise<void>((r) => srv.close(() => r()));
+    }
+  });
+
+  it('reconcile is a no-op when there are no stale rows', async () => {
+    const { service, servers } = makeService();
+    await expect(service.reconcileRunServers()).resolves.toEqual({
+      killed: 0,
+      cleared: 0,
+    });
+    expect(servers.remove).not.toHaveBeenCalled();
   });
 });

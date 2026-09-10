@@ -14,6 +14,7 @@ import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 import * as net from 'node:net';
 import { ImportJobEntity } from './entities/import-job.entity';
+import { RunServerEntity } from './entities/run-server.entity';
 import { SourcePolicyService } from './core/source-policy';
 import { ImportQueueService } from './queue/import.queue';
 import { ImportJob, ImportJobLogEntry, ImportState } from './core/types';
@@ -154,6 +155,48 @@ function findFreePort(): Promise<number> {
   });
 }
 
+/** True when a pid exists right now (signal 0 never delivers anything). */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Best-effort kill by pid (no handle needed). Returns whether it sent. */
+function killPid(pid: number): boolean {
+  try {
+    process.kill(pid);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** True when something on loopback currently accepts `port`. */
+function isPortOpen(
+  port: number,
+  host = '127.0.0.1',
+  timeoutMs = 500,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock = net.connect({ port, host });
+    const done = (v: boolean) => {
+      try {
+        sock.destroy();
+      } catch {
+        /* ignore */
+      }
+      resolve(v);
+    };
+    sock.once('connect', () => done(true));
+    sock.once('error', () => done(false));
+    sock.setTimeout(timeoutMs, () => done(false));
+  });
+}
+
 /** Resolve a `python` executable from the environment, cross-platform. */
 function pythonExecutable(): string {
   return process.platform === 'win32'
@@ -290,6 +333,8 @@ export class GameImportsService implements OnModuleInit {
     ) => ReturnType<typeof spawn> | null = openBrowser,
     @Inject(GAME_LOCAL_SERVER)
     private readonly launchServer: LocalServerLauncher = launchPythonHttpServer,
+    @InjectRepository(RunServerEntity)
+    private readonly servers: Repository<RunServerEntity>,
   ) {}
 
   private readonly running = new Map<string, RunServerEntry>();
@@ -339,20 +384,32 @@ export class GameImportsService implements OnModuleInit {
         where: { seq: null as unknown as number },
         order: { createdAt: 'ASC' },
       });
-      if (!unnumbered.length) return;
-      const last = await this.jobs
-        .createQueryBuilder('j')
-        .select('MAX(j.seq)', 'max')
-        .getRawOne();
-      let next = Number(last?.max ?? 0);
-      for (const e of unnumbered) {
-        next += 1;
-        e.seq = next;
+      if (unnumbered.length) {
+        const last = await this.jobs
+          .createQueryBuilder('j')
+          .select('MAX(j.seq)', 'max')
+          .getRawOne();
+        let next = Number(last?.max ?? 0);
+        for (const e of unnumbered) {
+          next += 1;
+          e.seq = next;
+        }
+        await this.jobs.save(unnumbered);
+        this.logger.log(
+          `Backfilled seq for ${unnumbered.length} import row(s)`,
+        );
       }
-      await this.jobs.save(unnumbered);
-      this.logger.log(`Backfilled seq for ${unnumbered.length} import row(s)`);
     } catch (err) {
       this.logger.warn(`seq backfill skipped: ${(err as Error).message}`);
+    }
+    // Always runs (even when the backfills above early-return): drop
+    // stale run-server rows from a previous boot and kill orphans.
+    try {
+      await this.reconcileRunServers();
+    } catch (err) {
+      this.logger.warn(
+        `run-server reconcile skipped: ${(err as Error).message}`,
+      );
     }
   }
 
@@ -778,6 +835,17 @@ export class GameImportsService implements OnModuleInit {
         /* best-effort */
       }
     }
+    // …or a persisted row without a live handle: kill by pid, drop row.
+    const row = await this.servers
+      .findOne({ where: { jobId: id } })
+      .catch(() => null);
+    if (row) {
+      wasRunning = true;
+      if (row.pid != null) killPid(row.pid);
+      await this.servers.delete({ jobId: id }).catch(() => undefined);
+    } else if (entry) {
+      await this.servers.delete({ jobId: id }).catch(() => undefined);
+    }
 
     const pkgRoot = e.packageUrl ? path.resolve(e.packageUrl) : null;
     await this.jobs.remove(e);
@@ -861,6 +929,19 @@ export class GameImportsService implements OnModuleInit {
     const entry: RunServerEntry = { child, root, url, port: actualPort };
     entry.browser = this.openInBrowser(url) ?? undefined;
     this.running.set(id, entry);
+    // Persist so a restart can find (and kill) this server instead of
+    // orphaning it. `save` upserts on the jobId primary key.
+    await this.servers
+      .save({
+        jobId: id,
+        port: actualPort,
+        pid: child.pid ?? null,
+        url,
+        root,
+      })
+      .catch((err) =>
+        this.logger.warn(`Could not persist run server row: ${err?.message}`),
+      );
     return { url, port: actualPort };
   }
 
@@ -868,23 +949,69 @@ export class GameImportsService implements OnModuleInit {
    * Stop the `python -m http.server` process started by {@link run} for a
    * job (if any). The browser tab itself is user-managed; closing a browser
    * window is not reliable cross-platform, so this only kills the server.
+   * Falls back to the persisted row (kill by pid) when the live handle is
+   * gone — e.g. the row outlived the process map.
    */
   async stop(id: string): Promise<{ url: string | null; stopped: boolean }> {
     const entry = this.running.get(id);
-    if (!entry) return { url: null, stopped: false };
-    this.running.delete(id);
-    if (entry.browser) {
+    if (entry) {
+      this.running.delete(id);
+      if (entry.browser) {
+        try {
+          entry.browser.kill();
+        } catch {
+          /* best-effort */
+        }
+      }
       try {
-        entry.browser.kill();
+        entry.child.kill();
+      } catch {
+        /* best-effort */
+      }
+      await this.servers.delete({ jobId: id }).catch(() => undefined);
+      return { url: entry.url, stopped: true };
+    }
+    const row = await this.servers
+      .findOne({ where: { jobId: id } })
+      .catch(() => null);
+    if (!row) return { url: null, stopped: false };
+    if (row.pid != null) killPid(row.pid);
+    await this.servers.delete({ jobId: id }).catch(() => undefined);
+    return { url: row.url, stopped: true };
+  }
+
+  /**
+   * Reconcile run-server rows left behind by a previous boot: any python
+   * process that is still alive AND still answering its recorded port is
+   * an orphan of the restart, so it is killed; every row is dropped so
+   * the fresh boot starts with no ghosts and free ports. The double
+   * check (pid alive + port answers) guards against PID recycling
+   * pointing at an unrelated process — a recycled pid almost never still
+   * serves our exact loopback port.
+   */
+  async reconcileRunServers(): Promise<{ killed: number; cleared: number }> {
+    let rows: RunServerEntity[] = [];
+    try {
+      rows = await this.servers.find();
+    } catch {
+      return { killed: 0, cleared: 0 };
+    }
+    let killed = 0;
+    for (const r of rows) {
+      if (r.pid != null && isAlive(r.pid) && (await isPortOpen(r.port))) {
+        if (killPid(r.pid)) killed += 1;
+      }
+      try {
+        await this.servers.remove(r);
       } catch {
         /* best-effort */
       }
     }
-    try {
-      entry.child.kill();
-    } catch {
-      /* best-effort */
+    if (rows.length) {
+      this.logger.log(
+        `Reconciled ${rows.length} stale run server(s) from a previous boot; killed ${killed} orphan process(es).`,
+      );
     }
-    return { url: entry.url, stopped: true };
+    return { killed, cleared: rows.length };
   }
 }

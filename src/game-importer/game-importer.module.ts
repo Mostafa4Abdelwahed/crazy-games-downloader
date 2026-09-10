@@ -2,6 +2,7 @@ import { Module, OnModuleInit } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ImportJobEntity } from './entities/import-job.entity';
 import { GameFolderEntity } from './entities/game-folder.entity';
+import { RunServerEntity } from './entities/run-server.entity';
 import { GameImportsController } from './game-imports.controller';
 import { ConsoleController } from './console/console.controller';
 import { GameImportsService } from './game-imports.service';
@@ -47,7 +48,13 @@ const ENGINE_COLLECTION = 'ENGINE_COLLECTION';
 const SOURCE_ADAPTER_COLLECTION = 'SOURCE_ADAPTER_COLLECTION';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([ImportJobEntity, GameFolderEntity])],
+  imports: [
+    TypeOrmModule.forFeature([
+      ImportJobEntity,
+      GameFolderEntity,
+      RunServerEntity,
+    ]),
+  ],
   // SettingsController must be registered BEFORE GameImportsController:
   // its literal `/game-imports/settings` routes would otherwise be shadowed
   // by the dynamic `GET /game-imports/:id` route.

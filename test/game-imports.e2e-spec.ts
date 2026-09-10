@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { GameImporterModule } from '../src/game-importer/game-importer.module';
 import { ImportJobEntity } from '../src/game-importer/entities/import-job.entity';
 import { GameFolderEntity } from '../src/game-importer/entities/game-folder.entity';
+import { RunServerEntity } from '../src/game-importer/entities/run-server.entity';
 import { SecureDownloader } from '../src/game-importer/core/downloader';
 import { ImportWorker } from '../src/game-importer/queue/import.worker';
 import {
@@ -47,6 +48,7 @@ function fakeDownloader(map: Record<string, Buffer>) {
 
 describe('Game imports integration', () => {
   let app: INestApplication;
+  let testingModule: TestingModule;
   let jobs: Repository<ImportJobEntity>;
   let workDir: string;
   let storeDir: string;
@@ -96,7 +98,7 @@ describe('Game imports integration', () => {
         TypeOrmModule.forRoot({
           type: 'sqlite',
           database: ':memory:',
-          entities: [ImportJobEntity, GameFolderEntity],
+          entities: [ImportJobEntity, GameFolderEntity, RunServerEntity],
           synchronize: true,
         }),
         GameImporterModule,
@@ -113,6 +115,7 @@ describe('Game imports integration', () => {
         child: { kill: jest.fn() },
       }))
       .compile();
+    testingModule = module;
 
     app = module.createNestApplication();
     app.useGlobalPipes(
@@ -202,12 +205,21 @@ describe('Game imports integration', () => {
       .expect(201);
     const done = await waitFor(created.body.id, ['completed', 'failed']);
     expect(done.status).toBe('completed');
+    const servers = testingModule.get<Repository<RunServerEntity>>(
+      getRepositoryToken(RunServerEntity),
+    );
 
     const run = await request(app.getHttpServer())
       .post(`/game-imports/${created.body.id}/run`)
       .expect(200);
     expect(run.body.url).toMatch(/^http:\/\/localhost:\d+\/$/);
     expect(run.body.port).toBeGreaterThan(0);
+    // The running server is persisted so a restart can find it.
+    const row = await servers.findOne({
+      where: { jobId: created.body.id },
+    });
+    expect(row).toBeTruthy();
+    expect(row?.port).toBe(run.body.port);
 
     // Double-start is idempotent (same server reused).
     const run2 = await request(app.getHttpServer())
@@ -219,6 +231,10 @@ describe('Game imports integration', () => {
       .post(`/game-imports/${created.body.id}/stop`)
       .expect(200);
     expect(stop.body).toEqual({ url: run.body.url, stopped: true });
+    // …and the persisted row is dropped with it.
+    await expect(
+      servers.findOne({ where: { jobId: created.body.id } }),
+    ).resolves.toBeNull();
   });
 
   it('refuses run for a job with no completed package', async () => {
