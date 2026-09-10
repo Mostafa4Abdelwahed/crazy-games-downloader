@@ -27,6 +27,12 @@ export interface DetectionContext {
   sourceUrl: string;
   /** Fetched HTML of the entry page (if any). Never executed. */
   html?: string;
+  /**
+   * Optional portal/wrapper page HTML containing delivery configuration.
+   * Checked as a secondary source for engine detection signals when the
+   * entry HTML alone is insufficient (e.g. JS-bootstrapped Unity frames).
+   */
+  portalHtml?: string;
   /** Final URL after redirects. */
   finalUrl?: string;
   /** Content-Type of entry response. */

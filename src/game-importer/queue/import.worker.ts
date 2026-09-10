@@ -172,6 +172,7 @@ export class ImportWorker {
         sourceUrl: resolved?.canonicalUrl ?? job.sourceUrl,
         finalUrl,
         html,
+        ...(resolved?.portalHtml ? { portalHtml: resolved.portalHtml } : {}),
         ...(resolved
           ? { fileNames: resolved.assetUrls.map(basenameOfUrl) }
           : {}),

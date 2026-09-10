@@ -18,13 +18,17 @@ export class UnityDetector {
   async detect(context: DetectionContext): Promise<DetectionResult> {
     const signals: DetectionSignal[] = [];
     const html = (context.html ?? '').slice(0, 500_000);
+    const portalHtml = (context.portalHtml ?? '').slice(0, 500_000);
     const names = (context.fileNames ?? []).map((n) => n.toLowerCase());
     const probeKeys = Object.keys(context.probes ?? {}).map((k) =>
       k.toLowerCase(),
     );
     const allNames = [...names, ...probeKeys];
 
-    const has = (re: RegExp) => re.test(html);
+    // Signals apply to the entry HTML and, when provided, the portal/wrapper
+    // page HTML (`__NEXT_DATA__` delivery config lives there even when the
+    // game frame is a JS-bootstrapped shell with no static Unity markers).
+    const has = (re: RegExp) => re.test(html) || re.test(portalHtml);
 
     signals.push({
       name: 'unity-loader-instantiation',
@@ -75,7 +79,7 @@ export class UnityDetector {
       detail: 'Build/ directory layout',
     });
 
-    const wasmName = allNames.some((n) => n.endsWith('.wasm'));
+    const wasmName = allNames.some((n) => /\.wasm(\.br)?$/i.test(n));
     const wasmRef = has(/\.wasm/i);
     signals.push({
       name: 'wasm-artifact',
@@ -84,7 +88,7 @@ export class UnityDetector {
       detail: '.wasm artifact or reference',
     });
 
-    const dataName = allNames.some((n) => n.endsWith('.data'));
+    const dataName = allNames.some((n) => /\.data(\.br)?$/i.test(n));
     const dataRef = has(/\.data/i);
     signals.push({
       name: 'data-artifact',
@@ -93,7 +97,9 @@ export class UnityDetector {
       detail: '.data artifact or reference',
     });
 
-    const frameworkName = allNames.some((n) => n.endsWith('.framework.js'));
+    const frameworkName = allNames.some((n) =>
+      /\.framework\.js(\.br)?$/i.test(n),
+    );
     const frameworkRef = has(/\.framework\.js/i);
     signals.push({
       name: 'framework-artifact',
@@ -104,7 +110,9 @@ export class UnityDetector {
 
     // Probe-based signal: known build artifacts reachable (HEAD/GET probes)
     const probeHits = probeKeys.filter((k) =>
-      /loader\.js$|framework\.js$|\.wasm$|\.data$/.test(k),
+      /loader\.js$|framework\.js$|\.wasm$|\.data$|\.wasm\.br$|\.data\.br$|\.framework\.js\.br$/.test(
+        k,
+      ),
     ).length;
     signals.push({
       name: 'probed-build-artifacts',

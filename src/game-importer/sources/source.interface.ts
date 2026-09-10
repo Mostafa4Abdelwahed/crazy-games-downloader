@@ -40,6 +40,12 @@ export interface ResolvedGameSource {
    * already fetched this during resolution.
    */
   entryHtml?: string;
+  /**
+   * Pre-fetched HTML of the portal page (platform wrapper around the game
+   * iframe). Contains delivery configuration (`__NEXT_DATA__`) that may
+   * declare Unity build assets even when the frame HTML is a JS shell.
+   */
+  portalHtml?: string;
   /** Absolute http(s) asset URLs exposed to the browser. Hints only. */
   assetUrls: string[];
   /**

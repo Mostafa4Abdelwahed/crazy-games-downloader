@@ -192,6 +192,7 @@ export class CrazyGamesSourceAdapter implements GameSourceAdapter {
         source: this.name,
         canonicalUrl: canonical,
         assetUrls: [],
+        portalHtml: html,
         ...(metadata ? { metadata } : {}),
       };
     }
@@ -223,6 +224,7 @@ export class CrazyGamesSourceAdapter implements GameSourceAdapter {
       gameUrl: frameUrl,
       entryUrl: frame.finalUrl,
       entryHtml: frameHtml,
+      portalHtml: html,
       assetUrls,
       ...(unityBuild ? { unityBuild } : {}),
       ...(metadata ? { metadata } : {}),
