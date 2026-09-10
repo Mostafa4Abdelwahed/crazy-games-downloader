@@ -121,6 +121,25 @@ export function contentTypeForFile(filePath: string): string {
       return 'video/webm';
     case 'txt':
       return 'text/plain';
+    case 'csv':
+      return 'text/csv';
+    case 'xml':
+      return 'application/xml';
+    case 'fnt':
+    case 'atlas':
+    case 'glsl':
+    case 'vert':
+    case 'frag':
+      return 'text/plain';
+    case 'm4a':
+      return 'audio/mp4';
+    case 'flac':
+      return 'audio/flac';
+    case 'opus':
+      return 'audio/opus';
+    case 'bin':
+    case 'pak':
+      return 'application/octet-stream';
     case 'unityweb':
       return 'application/octet-stream';
     default:

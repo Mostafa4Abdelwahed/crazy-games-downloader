@@ -46,10 +46,10 @@ function fakeDownloader(map: Record<string, FakeEntry>) {
 const OLD_HOSTS = process.env.SOURCE_ALLOWED_HOSTS;
 const OLD_ANY = process.env.ALLOW_ANY_HTTPS;
 
-function withPolicy(
-  fn: () => Promise<void>,
+function withPolicy<T>(
+  fn: () => Promise<T>,
   hosts = 'game-files.crazygames.com',
-): Promise<void> {
+): Promise<T> {
   process.env.SOURCE_ALLOWED_HOSTS = hosts;
   process.env.ALLOW_ANY_HTTPS = 'false';
   return fn();
@@ -285,6 +285,168 @@ describe('GenericHtml5Importer import', () => {
       expect(validation.valid).toBe(true);
       expect(pkg.manifest.fileCount).toBe(3); // index + stub + manifest
     });
+  });
+});
+
+describe('GenericHtml5Importer runtime harvest', () => {
+  const base = 'https://h.game-files.crazygames.com/g/7/index.html';
+  const appJsUrl = 'https://h.game-files.crazygames.com/g/7/js/app.js';
+
+  async function workDirFor(): Promise<string> {
+    return fs.mkdtempSync(path.join(os.tmpdir(), 'generic-html5-'));
+  }
+
+  function runImport(
+    map: Record<string, FakeEntry>,
+    sourceUrl = base,
+  ): Promise<{
+    pkg: Awaited<ReturnType<GenericHtml5Importer['import']>>;
+    downloader: ReturnType<typeof fakeDownloader>;
+    workDir: string;
+  }> {
+    return withPolicy(async () => {
+      const workDir = await workDirFor();
+      const downloader = fakeDownloader(map);
+      const importer = new GenericHtml5Importer(
+        downloader as unknown as SecureDownloader,
+        new SourcePolicyService(),
+      );
+      const pkg = await importer.import(makeContext(sourceUrl, workDir));
+      return { pkg, downloader, workDir };
+    });
+  }
+
+  it('mirrors JS-harvested runtime assets at entry-relative paths', async () => {
+    const musicUrl =
+      'https://h.game-files.crazygames.com/g/7/assets/music/theme.mp3';
+    const spriteUrl =
+      'https://h.game-files.crazygames.com/g/7/assets/sprites/a.png';
+    const { pkg } = await runImport({
+      [base]: {
+        body: Buffer.from(
+          '<html><head><script src="js/app.js"></script></head>' +
+            '<body></body></html>',
+        ),
+        contentType: 'text/html',
+      },
+      [appJsUrl]: {
+        body: Buffer.from(
+          'fetch("assets/music/theme.mp3");load("assets/sprites/a.png");',
+        ),
+        contentType: 'text/javascript',
+      },
+      [musicUrl]: { body: Buffer.from('mp3bytes'), contentType: 'audio/mpeg' },
+      [spriteUrl]: { body: Buffer.from('pngbytes'), contentType: 'image/png' },
+    });
+    expect(
+      fs.readFileSync(
+        path.join(pkg.rootPath, 'assets/music/theme.mp3'),
+        'utf8',
+      ),
+    ).toBe('mp3bytes');
+    expect(
+      fs.readFileSync(path.join(pkg.rootPath, 'assets/sprites/a.png'), 'utf8'),
+    ).toBe('pngbytes');
+    const validation = await new PackageValidator().validate(pkg);
+    expect(validation.valid).toBe(true);
+  });
+
+  it('copies static assets to mirrored paths reused at runtime', async () => {
+    const logoUrl = 'https://h.game-files.crazygames.com/g/7/img/logo.png';
+    const { pkg } = await runImport({
+      [base]: {
+        body: Buffer.from(
+          '<html><head><script src="js/app.js"></script></head>' +
+            `<body><img src="img/logo.png"></body></html>`,
+        ),
+        contentType: 'text/html',
+      },
+      [appJsUrl]: {
+        body: Buffer.from('var logo="img/logo.png";'),
+        contentType: 'text/javascript',
+      },
+      [logoUrl]: { body: Buffer.from('logobytes'), contentType: 'image/png' },
+    });
+    const hashed = path.join(pkg.rootPath, 'assets', `${sha1(logoUrl)}.png`);
+    const mirrored = path.join(pkg.rootPath, 'img/logo.png');
+    expect(fs.readFileSync(hashed, 'utf8')).toBe('logobytes');
+    expect(fs.readFileSync(mirrored, 'utf8')).toBe('logobytes');
+  });
+
+  it('downloads a TeaVM asset manifest and mirrors every entry', async () => {
+    const teavmJs = 'https://h.game-files.crazygames.com/g/7/teavm/app.js';
+    const manifestUrl =
+      'https://h.game-files.crazygames.com/g/7/assets/assets.txt';
+    const musicUrl =
+      'https://h.game-files.crazygames.com/g/7/assets/music/a.mp3';
+    const spriteUrl =
+      'https://h.game-files.crazygames.com/g/7/assets/sprites/b.png';
+    const { pkg } = await runImport({
+      [base]: {
+        body: Buffer.from(
+          '<html><head><!-- teaVM Game-->' +
+            '<script src="teavm/app.js"></script></head><body></body></html>',
+        ),
+        contentType: 'text/html',
+      },
+      [teavmJs]: {
+        body: Buffer.from('console.log("boot");'),
+        contentType: 'text/javascript',
+      },
+      [manifestUrl]: {
+        body: Buffer.from(
+          'a:music/a.mp3:4:audio/mpeg\ni:sprites/b.png:3:image/png\n',
+        ),
+        contentType: 'text/plain',
+      },
+      [musicUrl]: { body: Buffer.from('mp3!'), contentType: 'audio/mpeg' },
+      [spriteUrl]: { body: Buffer.from('png'), contentType: 'image/png' },
+    });
+    expect(
+      fs.readFileSync(path.join(pkg.rootPath, 'assets/assets.txt'), 'utf8'),
+    ).toContain('music/a.mp3');
+    expect(
+      fs.readFileSync(path.join(pkg.rootPath, 'assets/music/a.mp3'), 'utf8'),
+    ).toBe('mp3!');
+    expect(
+      fs.readFileSync(path.join(pkg.rootPath, 'assets/sprites/b.png'), 'utf8'),
+    ).toBe('png');
+    const validation = await new PackageValidator().validate(pkg);
+    expect(validation.valid).toBe(true);
+  });
+
+  it('ignores foreign, data: and non-manifest responses', async () => {
+    const teavmJs = 'https://h.game-files.crazygames.com/g/7/teavm/app.js';
+    const manifestUrl =
+      'https://h.game-files.crazygames.com/g/7/assets/assets.txt';
+    const { pkg, downloader } = await runImport({
+      [base]: {
+        body: Buffer.from(
+          '<html><head><!-- teaVM Game-->' +
+            '<script src="teavm/app.js"></script></head><body></body></html>',
+        ),
+        contentType: 'text/html',
+      },
+      [teavmJs]: {
+        body: Buffer.from(
+          'var a="https://evil.example.com/x.png";' +
+            'var b="data:image/png;base64,iVBOR";',
+        ),
+        contentType: 'text/javascript',
+      },
+      [manifestUrl]: {
+        body: Buffer.from('this is not a manifest\njust text\n'),
+        contentType: 'text/plain',
+      },
+    });
+    expect(downloader.calls.some((c) => c.includes('evil.example.com'))).toBe(
+      false,
+    );
+    expect(fs.existsSync(path.join(pkg.rootPath, 'assets/assets.txt'))).toBe(
+      false,
+    );
+    const validation = await new PackageValidator().validate(pkg);
+    expect(validation.valid).toBe(true);
   });
 });
 

@@ -35,6 +35,13 @@ const SCRIPT_TAG_RE = /<script/i;
 const MAX_ENTRY_BYTES = 5_000_000;
 const MAX_ASSETS = 500;
 const MAX_CSS_SECOND_PASS = 100;
+// Runtime harvest bounds: JS string literals that look like asset paths,
+// resolved against the entry document base and mirrored entry-relative.
+const MAX_HARVESTED_REFS = 500;
+const MAX_HARVEST_SCAN_BYTES = 2_000_000;
+// TeaVM/libGDX web builds list every runtime resource in assets/assets.txt.
+const MAX_MANIFEST_BYTES = 2_000_000;
+const MAX_MANIFEST_ENTRIES = 2000;
 
 /**
  * Generic HTML5 engine importer.
@@ -299,6 +306,151 @@ export class GenericHtml5Importer implements GameEngineImporter {
       }
     }
 
+    // ── 5b. Runtime harvest: JS string literals ────────────────────────
+    // Games fetch most assets at runtime from JS (PixiJS loaders, XHR,
+    // dynamic import()).  Those references are invisible to static HTML
+    // discovery, so harvest quoted asset-like paths from the entry HTML
+    // and every downloaded script, resolve them against the entry
+    // document base, and store them mirrored at the entry-relative path
+    // so runtime requests hit packaged files without touching JS bytes.
+    const writeMirroredFile = async (
+      rel: string,
+      body: Buffer,
+      via: string,
+      remoteUrl: string,
+    ): Promise<void> => {
+      if (files.some((f) => f.path === rel)) return; // collision — keep first
+      const dest = path.join(pkgDir, ...rel.split('/'));
+      await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+      await fs.promises.writeFile(dest, body);
+      files.push({
+        path: normalizePackagePath(rel),
+        bytes: body.length,
+        contentType: contentTypeForFile(rel),
+      });
+      await report({ downloadedFiles: ++downloaded });
+      emit(
+        'info',
+        DiagnosticCode.HTML5_RUNTIME_ASSET_DISCOVERED,
+        `Mirrored runtime asset ${rel}`,
+        { url: safeUrlForLog(remoteUrl), bytes: body.length, via },
+      );
+    };
+    const storeMirrored = async (
+      absStr: string,
+      via: string,
+    ): Promise<void> => {
+      const rel = mirrorLocalPath(baseUrl, absStr);
+      if (!rel) return;
+      if (files.some((f) => f.path === rel)) return;
+      // Already downloaded as a hashed static asset?  Copy the bytes into
+      // the mirrored location instead of re-downloading.
+      const hashedRel = byAbs.get(absStr);
+      if (hashedRel) {
+        try {
+          const body = await fs.promises.readFile(
+            path.join(pkgDir, ...hashedRel.split('/')),
+          );
+          await writeMirroredFile(rel, body, via, absStr);
+        } catch {
+          /* copy failures are non-fatal */
+        }
+        return;
+      }
+      try {
+        this.policy.assertAllowed(absStr);
+      } catch {
+        return;
+      }
+      try {
+        const res = await this.downloader.fetchBuffer(absStr, {
+          timeoutMs: Math.min(30_000, limits.timeoutMs),
+          maxBytes: limits.maxDownloadBytes,
+          headers: { Referer: referer },
+        });
+        this.policy.assertAllowed(res.finalUrl);
+        await writeMirroredFile(rel, res.body, via, res.finalUrl);
+      } catch {
+        /* runtime-harvest failures are non-fatal by design */
+      }
+    };
+    const harvestSources: string[] = [html];
+    for (const f of files) {
+      if (
+        f.contentType === 'text/javascript' ||
+        f.path.endsWith('.js') ||
+        f.path.endsWith('.mjs')
+      ) {
+        try {
+          const body = await fs.promises.readFile(
+            path.join(pkgDir, ...f.path.split('/')),
+            'utf8',
+          );
+          harvestSources.push(body);
+        } catch {
+          /* unreadable script — skip harvesting it */
+        }
+      }
+    }
+    const harvested = new Set<string>();
+    for (const src of harvestSources) {
+      for (const abs of harvestJsAssetRefs(src, baseUrl, MAX_HARVESTED_REFS)) {
+        if (harvested.has(abs)) continue;
+        harvested.add(abs);
+        if (harvested.size > MAX_HARVESTED_REFS) break;
+        await storeMirrored(abs, 'js-harvest');
+      }
+      if (harvested.size >= MAX_HARVESTED_REFS) break;
+    }
+
+    // ── 5c. TeaVM asset manifest ─────────────────────────────────────────
+    // TeaVM/libGDX web builds (common on CrazyGames) list every runtime
+    // resource in `assets/assets.txt` (`type:path:size:mime` per line).
+    // The entries are entry-relative, so mirror the whole manifest.
+    if (/teavm\//i.test(html) || /teaVM/i.test(html)) {
+      const manifestAbs = new URL('assets/assets.txt', baseUrl).toString();
+      try {
+        this.policy.assertAllowed(manifestAbs);
+        const mres = await this.downloader.fetchBuffer(manifestAbs, {
+          timeoutMs: Math.min(15_000, limits.timeoutMs),
+          maxBytes: Math.min(limits.maxDownloadBytes, MAX_MANIFEST_BYTES),
+          headers: { Referer: referer },
+        });
+        this.policy.assertAllowed(mres.finalUrl);
+        const entries = parseTeavmManifest(
+          mres.body.toString('utf8', 0, MAX_MANIFEST_BYTES),
+        );
+        if (entries.length > 0) {
+          emit(
+            'info',
+            DiagnosticCode.HTML5_MANIFEST_FOUND,
+            `TeaVM asset manifest with ${entries.length} entries`,
+            { url: safeUrlForLog(mres.finalUrl) },
+          );
+          const manifestRel = mirrorLocalPath(baseUrl, mres.finalUrl);
+          if (manifestRel) {
+            await writeMirroredFile(
+              manifestRel,
+              mres.body,
+              'teavm-manifest',
+              mres.finalUrl,
+            );
+          }
+          for (const e of entries.slice(0, MAX_MANIFEST_ENTRIES)) {
+            let abs: string;
+            try {
+              abs = new URL(e, mres.finalUrl).toString();
+            } catch {
+              continue;
+            }
+            await storeMirrored(abs, 'teavm-manifest');
+          }
+        }
+      } catch {
+        /* manifest probe failures are non-fatal */
+      }
+    }
+
     // ── 6. Rewrite HTML references ───────────────────────────────────────
     // Longest raws first so a short ref can never be rewritten inside a
     // longer one (e.g. `/app.js` inside `/app.js?v=2`).
@@ -504,6 +656,123 @@ function discoverCssRefs(cssText: string): string[] {
     refs.push(inner);
   }
   return refs;
+}
+
+const HARVEST_EXTS =
+  'js|mjs|png|jpe?g|gif|webp|svg|bmp|ico|mp3|ogg|wav|m4a|flac|opus|' +
+  'mp4|webm|json|txt|xml|csv|fnt|atlas|ttf|otf|woff2?|glsl|vert|frag|' +
+  'bin|dat|wasm|pak|map';
+const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
+
+/**
+ * Harvest quoted asset-like paths from JS/HTML text (best-effort static
+ * extraction of runtime references: PixiJS loader lists, XHR URLs, dynamic
+ * imports).  Returns absolute http(s) URLs resolved against `baseUrl`.
+ */
+function harvestJsAssetRefs(
+  text: string,
+  baseUrl: string,
+  cap: number,
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const re = new RegExp(
+    `["']([^"'\\s<>|\\\\]{1,200}\\.(?:${HARVEST_EXTS})(?:\\?[^"'\\s<>]*)?)["']`,
+    'gi',
+  );
+  let m: RegExpExecArray | null;
+  const src = text.slice(0, MAX_HARVEST_SCAN_BYTES);
+  while ((m = re.exec(src)) !== null) {
+    const raw = m[1];
+    if (
+      raw.includes('://') ||
+      raw.includes('${') ||
+      raw.includes('{') ||
+      raw.includes('}') ||
+      raw.startsWith('//') ||
+      SCHEME_RE.test(raw)
+    ) {
+      continue;
+    }
+    let abs: URL;
+    try {
+      abs = new URL(raw, baseUrl);
+    } catch {
+      continue;
+    }
+    if (!['http:', 'https:'].includes(abs.protocol)) continue;
+    const absStr = abs.toString();
+    if (seen.has(absStr)) continue;
+    seen.add(absStr);
+    out.push(absStr);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+/**
+ * Parse a TeaVM `assets.txt` manifest (`type:path:size:mime` per line).
+ * Returns the entry-relative resource paths.  Returns [] unless the text
+ * convincingly looks like a manifest (majority of lines valid).
+ */
+function parseTeavmManifest(text: string): string[] {
+  const entries: string[] = [];
+  let valid = 0;
+  let nonEmpty = 0;
+  for (const line of text.split(/\r?\n/).slice(0, 10_000)) {
+    const t = line.trim();
+    if (!t) continue;
+    nonEmpty++;
+    const m = /^([A-Za-z]):([^:\n]{1,220}):(\d{1,12}):([^:\n]{1,120})$/.exec(t);
+    if (!m) continue;
+    valid++;
+    entries.push(m[2]);
+  }
+  if (valid === 0 || valid / Math.max(1, nonEmpty) < 0.5) return [];
+  return entries;
+}
+
+const MIRROR_RESERVED_TOP = new Set([
+  'index.html',
+  'manifest.json',
+  'crazygames-sdk-stub.js',
+]);
+
+/**
+ * Map an absolute asset URL to the entry-relative package path that the
+ * game's document-relative runtime requests will resolve to locally.
+ * Same-origin only; `..` segments above the entry directory clamp to the
+ * package root (mirroring browser resolution at `/`).  Returns null when
+ * the URL cannot be represented inside the package.
+ */
+function mirrorLocalPath(entryBase: string, absUrl: string): string | null {
+  let base: URL;
+  let abs: URL;
+  try {
+    base = new URL(entryBase);
+    abs = new URL(absUrl);
+  } catch {
+    return null;
+  }
+  if (abs.origin !== base.origin) return null;
+  if (!['http:', 'https:'].includes(abs.protocol)) return null;
+  const entryDir = base.pathname.endsWith('/')
+    ? base.pathname
+    : base.pathname.slice(0, base.pathname.lastIndexOf('/') + 1);
+  const rel = path.posix.relative(entryDir || '/', abs.pathname);
+  const segs = rel
+    .split('/')
+    .filter((s) => s !== '' && s !== '.' && s !== '..');
+  if (segs.length === 0) return null;
+  const relPath = segs.join('/');
+  if (relPath.length > 200) return null;
+  if (!/^[A-Za-z0-9._~!$&'()*+,;=:@%/-]+$/.test(relPath)) return null;
+  if (MIRROR_RESERVED_TOP.has(relPath)) return null;
+  try {
+    return normalizePackagePath(relPath);
+  } catch {
+    return null;
+  }
 }
 
 /**
