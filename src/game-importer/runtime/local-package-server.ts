@@ -132,6 +132,15 @@ export class LocalPackageServer {
     try {
       stat = await fs.promises.stat(abs);
     } catch {
+      // Browser chrome auto-requests /favicon.ico for every page. Answer
+      // 204 (no content) instead of 404 so game consoles stay free of
+      // chrome-noise 404s; a real packaged favicon (stat succeeds) is
+      // still served as a file below.
+      if (decoded.toLowerCase() === '/favicon.ico') {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('not found');
       return;

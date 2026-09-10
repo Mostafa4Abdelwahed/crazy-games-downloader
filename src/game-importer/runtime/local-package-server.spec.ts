@@ -58,6 +58,25 @@ describe('LocalPackageServer', () => {
     expect((await fetch(`${server.url}Build/`)).status).toBe(404);
   });
 
+  it('answers 204 for the browser-chrome favicon request (no 404 noise)', async () => {
+    const srv = new LocalPackageServer();
+    server = await srv.serve(root);
+    const res = await fetch(`${server.url}favicon.ico`);
+    expect(res.status).toBe(204);
+    expect(await res.text()).toBe('');
+    const head = await fetch(`${server.url}favicon.ico`, { method: 'HEAD' });
+    expect(head.status).toBe(204);
+  });
+
+  it('still serves a real packaged favicon.ico as a file', async () => {
+    fs.writeFileSync(path.join(root, 'favicon.ico'), 'icon-bytes');
+    const srv = new LocalPackageServer();
+    server = await srv.serve(root);
+    const res = await fetch(`${server.url}favicon.ico`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('icon-bytes');
+  });
+
   it('blocks path traversal including encoded variants', async () => {
     const srv = new LocalPackageServer();
     server = await srv.serve(root);
