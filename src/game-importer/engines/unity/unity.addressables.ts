@@ -43,6 +43,11 @@ import {
  * - Discovery probes `<streaming-assets-base>/aa/...` candidates
  *   (policy-gated, bounded). A missing catalog is NORMAL for
  *   non-Addressables games and simply skips the phase.
+ * - Catalog locations that are not JSON are content-sniffed: Unity
+ *   bundle-catalogs (`catalog.bundle`, magic-verified) are packaged
+ *   verbatim instead of skipped.
+ * - Every packaged catalog artifact also pulls its `.hash` sidecar when
+ *   present — the runtime fetches it before the catalog itself.
  * - Only entries resolvable under a StreamingAssets tree are packaged
  *   (nesting preserved, same canonical top-level layout as bank
  *   dependencies). Absolute external bundle URLs are recorded as
@@ -54,6 +59,55 @@ import {
  */
 
 export const ADDRESSABLES_SETTINGS_SUFFIX = 'aa/settings.json';
+
+/**
+ * Unity asset-bundle magic prefixes: `UnityFS` (modern serialized
+ * bundles, including bundled Addressables catalogs like
+ * `catalog.bundle`) plus the legacy `UnityWeb`/`UnityRaw` markers.
+ * Content-sniffed, never extension-sniffed, so any game serving a
+ * bundle-catalog under any name is handled without per-game rules.
+ */
+const UNITY_BUNDLE_MAGICS = ['UnityFS', 'UnityWeb', 'UnityRaw'];
+
+/**
+ * True when the bytes start with a Unity asset-bundle magic marker.
+ * Used to recognize binary bundle-catalogs (`catalog.bundle`) that a
+ * catalog location points at: they are valid Addressables artifacts
+ * even though they are not JSON.
+ */
+export function hasUnityBundleMagic(bytes: Buffer): boolean {
+  if (!bytes || bytes.length < 7) return false;
+  const head = bytes.subarray(0, 8).toString('ascii');
+  return UNITY_BUNDLE_MAGICS.some((m) => head.startsWith(m));
+}
+
+/**
+ * The `.hash` sidecar URL for a catalog artifact (`catalog.json` →
+ * `catalog.hash`, `catalog_2025.10.02.13.29.38.json` →
+ * `catalog_2025.10.02.13.29.38.hash`). The Addressables runtime always
+ * fetches the sidecar before the catalog itself (remote update check),
+ * so a packaged catalog without its sidecar 404s at runtime. Returns
+ * null when the URL has no usable extension or already targets a
+ * sidecar.
+ */
+export function hashSidecarUrl(catalogUrl: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(catalogUrl);
+  } catch {
+    return null;
+  }
+  if (!['http:', 'https:'].includes(u.protocol)) return null;
+  const slash = u.pathname.lastIndexOf('/');
+  const name = u.pathname.slice(slash + 1);
+  const dot = name.lastIndexOf('.');
+  if (dot <= 0) return null;
+  if (name.slice(dot + 1).toLowerCase() === 'hash') return null;
+  u.pathname = `${u.pathname.slice(0, slash + 1)}${name.slice(0, dot)}.hash`;
+  u.search = '';
+  u.hash = '';
+  return u.toString();
+}
 
 /**
  * Unity runtime-property placeholders found inside Addressables catalog

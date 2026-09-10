@@ -10,6 +10,8 @@ import {
   expandRuntimePath,
   extractCatalogInternalIds,
   extractCatalogLocations,
+  hashSidecarUrl,
+  hasUnityBundleMagic,
   isAddressablesCatalog,
   isAddressablesSettings,
   mentionsAddressables,
@@ -475,5 +477,215 @@ describe('unity addressables tree download', () => {
     expect(res.limitReached).toBe(true);
     // 2 entries + rewritten catalog within a 3-file budget.
     expect(res.files.length).toBeLessThanOrEqual(3);
+  });
+});
+
+describe('unity addressables bundle-catalogs and hash sidecars', () => {
+  const SETTINGS_URL =
+    'https://cdn.example/g/90/StreamingAssets/aa/settings.json';
+  const RT = '{UnityEngine.AddressableAssets.Addressables.RuntimePath}';
+
+  function settingsWithCatalogLocation(internalId: string): string {
+    return JSON.stringify({
+      m_CatalogLocations: [{ m_InternalId: internalId }],
+    });
+  }
+
+  function discoveryWithHeaders(bodies: Record<string, Buffer | Error>): {
+    d: UnityStreamingAssetsDiscovery;
+    calls: Array<{ url: string; headers?: Record<string, string> }>;
+  } {
+    const calls: Array<{ url: string; headers?: Record<string, string> }> = [];
+    const downloader = {
+      fetchBuffer: async (
+        url: string,
+        opts?: { headers?: Record<string, string> },
+      ) => {
+        calls.push({ url, headers: opts?.headers });
+        const hit = bodies[url];
+        if (hit instanceof Error) throw hit;
+        if (!hit) {
+          const err = new Error(`Fake 404 for ${url}`);
+          (err as { status?: number }).status = 404;
+          throw err;
+        }
+        return { finalUrl: url, status: 200, body: hit, redirected: false };
+      },
+    } as unknown as SecureDownloader;
+    return {
+      d: new UnityStreamingAssetsDiscovery(
+        downloader,
+        new SourcePolicyService(),
+      ),
+      calls,
+    };
+  }
+
+  it('sniffs Unity bundle magic instead of trusting extensions', () => {
+    expect(hasUnityBundleMagic(Buffer.from('UnityFS........'))).toBe(true);
+    expect(hasUnityBundleMagic(Buffer.from('UnityWeb-data'))).toBe(true);
+    expect(hasUnityBundleMagic(Buffer.from('UnityRaw\x00\x01'))).toBe(true);
+    expect(hasUnityBundleMagic(Buffer.from('{"m_LocatorId":'))).toBe(false);
+    expect(hasUnityBundleMagic(Buffer.from('Unity'))).toBe(false);
+    expect(hasUnityBundleMagic(Buffer.alloc(0))).toBe(false);
+  });
+
+  it('maps any catalog artifact name to its .hash sidecar', () => {
+    expect(hashSidecarUrl('https://cdn.example/a/catalog.json')).toBe(
+      'https://cdn.example/a/catalog.hash',
+    );
+    // Timestamped dynamic names (requested at runtime per build).
+    expect(
+      hashSidecarUrl(
+        'https://cdn.example/g/StreamingAssets/aa/WebGL/catalog_2025.10.02.13.29.38.json',
+      ),
+    ).toBe(
+      'https://cdn.example/g/StreamingAssets/aa/WebGL/catalog_2025.10.02.13.29.38.hash',
+    );
+    expect(hashSidecarUrl('https://cdn.example/a/catalog.bundle')).toBe(
+      'https://cdn.example/a/catalog.hash',
+    );
+    expect(hashSidecarUrl('https://cdn.example/a/catalog.hash')).toBeNull();
+    expect(hashSidecarUrl('https://cdn.example/a/noext')).toBeNull();
+    expect(hashSidecarUrl('not a url')).toBeNull();
+  });
+
+  it('packages a binary bundle-catalog location verbatim plus its sidecar', async () => {
+    const BUNDLE_URL =
+      'https://cdn.example/g/90/StreamingAssets/aa/WebGL/catalog_2025.10.02.13.29.38.bundle';
+    const HASH_URL =
+      'https://cdn.example/g/90/StreamingAssets/aa/WebGL/catalog_2025.10.02.13.29.38.hash';
+    const bundleBody = Buffer.concat([
+      Buffer.from('UnityFS'),
+      Buffer.from('binary-catalog-payload'),
+    ]);
+    const { d } = discoveryWithHeaders({
+      [SETTINGS_URL]: Buffer.from(
+        settingsWithCatalogLocation(
+          `${RT}/WebGL/catalog_2025.10.02.13.29.38.bundle`,
+        ),
+      ),
+      [BUNDLE_URL]: bundleBody,
+      [HASH_URL]: Buffer.from('bundle-hash-1'),
+    });
+    const written = new Map<string, Buffer>();
+    const res = await d.downloadAddressablesTree({
+      candidateCatalogUrls: [SETTINGS_URL],
+      writeFile: async (p, bytes) => {
+        written.set(p, bytes);
+      },
+    });
+    // Binary catalog packaged byte-identical (never JSON-parsed/rewritten).
+    const pkgPath =
+      'StreamingAssets/aa/WebGL/catalog_2025.10.02.13.29.38.bundle';
+    expect(res.files.map((f) => f.path)).toContain(pkgPath);
+    expect(written.get(pkgPath)).toEqual(bundleBody);
+    // Its .hash sidecar travels with it (runtime update check).
+    const hashPkgPath =
+      'StreamingAssets/aa/WebGL/catalog_2025.10.02.13.29.38.hash';
+    expect(res.files.map((f) => f.path)).toContain(hashPkgPath);
+    expect(written.get(hashPkgPath)?.toString('utf8')).toBe('bundle-hash-1');
+  });
+
+  it('packages the .hash sidecar next to a JSON content catalog', async () => {
+    const CATALOG_URL =
+      'https://cdn.example/g/90/StreamingAssets/aa/catalog.json';
+    const HASH_URL = 'https://cdn.example/g/90/StreamingAssets/aa/catalog.hash';
+    const BUNDLE_URL =
+      'https://cdn.example/g/90/StreamingAssets/aa/WebGL/x.bundle';
+    const { d } = discoveryWithHeaders({
+      [SETTINGS_URL]: Buffer.from(
+        settingsWithCatalogLocation(`${RT}/catalog.json`),
+      ),
+      [CATALOG_URL]: Buffer.from(
+        JSON.stringify({
+          m_LocatorId: 'AddressablesMainContentCatalog',
+          m_InternalIds: [`${RT}/WebGL/x.bundle`],
+        }),
+      ),
+      [HASH_URL]: Buffer.from('catalog-hash-9'),
+      [BUNDLE_URL]: Buffer.from('bundle-bytes'),
+    });
+    const written = new Map<string, Buffer>();
+    const res = await d.downloadAddressablesTree({
+      candidateCatalogUrls: [SETTINGS_URL],
+      writeFile: async (p, bytes) => {
+        written.set(p, bytes);
+      },
+    });
+    const paths = res.files.map((f) => f.path);
+    expect(paths).toContain('StreamingAssets/aa/settings.json');
+    expect(paths).toContain('StreamingAssets/aa/catalog.json');
+    expect(paths).toContain('StreamingAssets/aa/catalog.hash');
+    expect(paths).toContain('StreamingAssets/aa/WebGL/x.bundle');
+    expect(
+      written.get('StreamingAssets/aa/catalog.hash')?.toString('utf8'),
+    ).toBe('catalog-hash-9');
+  });
+
+  it('skips a missing sidecar silently (normal for local catalogs)', async () => {
+    const CATALOG_URL =
+      'https://cdn.example/g/90/StreamingAssets/aa/catalog.json';
+    const { d } = discoveryWithHeaders({
+      [SETTINGS_URL]: Buffer.from(
+        settingsWithCatalogLocation(`${RT}/catalog.json`),
+      ),
+      [CATALOG_URL]: Buffer.from(
+        JSON.stringify({
+          m_LocatorId: 'AddressablesMainContentCatalog',
+          m_InternalIds: [],
+        }),
+      ),
+    });
+    const written = new Map<string, Buffer>();
+    const res = await d.downloadAddressablesTree({
+      candidateCatalogUrls: [SETTINGS_URL],
+      writeFile: async (p, bytes) => {
+        written.set(p, bytes);
+      },
+    });
+    expect(res.files.map((f) => f.path)).toContain(
+      'StreamingAssets/aa/catalog.json',
+    );
+    expect(res.files.map((f) => f.path)).not.toContain(
+      'StreamingAssets/aa/catalog.hash',
+    );
+  });
+
+  it('sends the source page Referer on every addressables download', async () => {
+    const ENTRY_BUNDLE =
+      'https://cdn.example/g/90/StreamingAssets/aa/WebGL/x.bundle';
+    const { d, calls } = discoveryWithHeaders({
+      [CATALOG_URL]: Buffer.from(catalogJson([ENTRY_BUNDLE])),
+      [ENTRY_BUNDLE]: Buffer.from('bundle-bytes'),
+    });
+    await d.downloadAddressablesTree({
+      candidateCatalogUrls: [CATALOG_URL],
+      writeFile: async () => undefined,
+      referer: 'https://portal.example/game',
+    });
+    expect(calls.length).toBeGreaterThan(0);
+    for (const c of calls) {
+      expect(c.headers).toEqual({ Referer: 'https://portal.example/game' });
+    }
+  });
+
+  it('sends the source page Referer on streaming-assets downloads', async () => {
+    const URL_A = 'https://cdn.example/g/90/StreamingAssets/aa/a.bundle';
+    const { d, calls } = discoveryWithHeaders({
+      [URL_A]: Buffer.from('bytes'),
+    });
+    const res = await d.downloadAll(
+      [{ url: URL_A, path: 'StreamingAssets/aa/a.bundle' }],
+      {
+        writeFile: async () => undefined,
+        referer: 'https://portal.example/game',
+      },
+    );
+    expect(res.files).toHaveLength(1);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].headers).toEqual({
+      Referer: 'https://portal.example/game',
+    });
   });
 });

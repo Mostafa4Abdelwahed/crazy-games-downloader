@@ -356,6 +356,7 @@ export class UnityImporter implements GameEngineImporter {
         pkgDir,
         limits,
         emit,
+        referer,
       });
       for (const f of sa) streamingFiles.push(f);
     }
@@ -462,6 +463,7 @@ export class UnityImporter implements GameEngineImporter {
         already,
         limits,
         emit,
+        referer,
       });
       for (const f of extra) {
         const abs = path.join(pkgDir, ...f.path.split('/'));
@@ -485,6 +487,7 @@ export class UnityImporter implements GameEngineImporter {
         pkgDir,
         limits,
         emit,
+        referer,
       });
       for (const f of extra) {
         const abs = path.join(pkgDir, ...f.path.split('/'));
@@ -580,6 +583,7 @@ export class UnityImporter implements GameEngineImporter {
       message: string,
       details?: Record<string, unknown>,
     ) => void;
+    referer: string;
   }): Promise<{ path: string; sourceUrl: string }[]> {
     const {
       streamingAssetsUrl,
@@ -590,6 +594,7 @@ export class UnityImporter implements GameEngineImporter {
       pkgDir,
       limits,
       emit,
+      referer,
     } = args;
     const svc =
       this.streamingAssets ??
@@ -689,7 +694,7 @@ export class UnityImporter implements GameEngineImporter {
     }
     return this.downloadStreamingCandidates(
       candidates,
-      { pkgDir, limits, emit },
+      { pkgDir, limits, emit, referer },
       `StreamingAssets discovery completed`,
       { prefix },
     );
@@ -716,8 +721,10 @@ export class UnityImporter implements GameEngineImporter {
       message: string,
       details?: Record<string, unknown>,
     ) => void;
+    referer: string;
   }): Promise<{ path: string; sourceUrl: string }[]> {
-    const { pkgDir, signal, configBaseUrl, already, limits, emit } = args;
+    const { pkgDir, signal, configBaseUrl, already, limits, emit, referer } =
+      args;
     const localEnabled =
       (
         process.env.UNITY_STREAMING_ASSETS_LOCAL_DISCOVERY ?? 'true'
@@ -791,7 +798,7 @@ export class UnityImporter implements GameEngineImporter {
     }
     return this.downloadStreamingCandidates(
       candidates,
-      { pkgDir, limits, emit },
+      { pkgDir, limits, emit, referer },
       'StreamingAssets local completion finished',
       { count: candidates.length },
     );
@@ -812,11 +819,12 @@ export class UnityImporter implements GameEngineImporter {
         message: string,
         details?: Record<string, unknown>,
       ) => void;
+      referer: string;
     },
     completedMessage: string,
     completedDetails: Record<string, unknown>,
   ): Promise<{ path: string; sourceUrl: string }[]> {
-    const { pkgDir, limits, emit } = ctx;
+    const { pkgDir, limits, emit, referer } = ctx;
     const svc =
       this.streamingAssets ??
       new UnityStreamingAssetsDiscovery(this.downloader, this.policy);
@@ -830,6 +838,7 @@ export class UnityImporter implements GameEngineImporter {
     const result = await svc.downloadAll(candidates, {
       timeoutMs: Math.min(opts.requestTimeoutMs, limits.timeoutMs),
       maxTotalBytes: Math.min(opts.maxTotalBytes, limits.maxDownloadBytes),
+      referer,
       writeFile: async (packagePath, bytes) => {
         const abs = path.join(pkgDir, ...packagePath.split('/'));
         await fs.promises.mkdir(path.dirname(abs), { recursive: true });
@@ -926,8 +935,10 @@ export class UnityImporter implements GameEngineImporter {
       message: string,
       details?: Record<string, unknown>,
     ) => void;
+    referer: string;
   }): Promise<{ path: string; sourceUrl: string }[]> {
-    const { signal, configBaseUrl, already, pkgDir, limits, emit } = args;
+    const { signal, configBaseUrl, already, pkgDir, limits, emit, referer } =
+      args;
     const svc =
       this.streamingAssets ??
       new UnityStreamingAssetsDiscovery(this.downloader, this.policy);
@@ -952,6 +963,7 @@ export class UnityImporter implements GameEngineImporter {
       timeoutMs: Math.min(opts.requestTimeoutMs, limits.timeoutMs),
       maxFiles: remainingFiles,
       maxTotalBytes: Math.min(opts.maxTotalBytes, limits.maxDownloadBytes),
+      referer,
       onEvent: (d) => emit(d.level, d.code, d.message, d.details),
     });
     return result.files.filter((f) => !already.has(f.path));

@@ -26,6 +26,8 @@ import {
   expandRuntimePath,
   extractCatalogInternalIds,
   extractCatalogLocations,
+  hashSidecarUrl,
+  hasUnityBundleMagic,
   isAddressablesCatalog,
   isAddressablesSettings,
   rewriteCatalogIds,
@@ -424,6 +426,11 @@ export class UnityStreamingAssetsDiscovery {
     timeoutMs?: number;
     maxFiles?: number;
     maxTotalBytes?: number;
+    /**
+     * Source page URL sent as `Referer` (CDN hotlink protection rejects
+     * bare requests). Optional so unit tests stay header-agnostic.
+     */
+    referer?: string;
     onEvent?: (d: ImportDiagnostic) => void;
   }): Promise<StreamingDownloadResult> {
     const collector = new DiagnosticCollector();
@@ -453,10 +460,13 @@ export class UnityStreamingAssetsDiscovery {
     });
 
     // Policy/SSRF-guarded text fetch used for the small bootstrap files.
+    // Bodies are always complete (the downloader throws on size-cap
+    // overflow), so content-sniffing them is definitive.
+    const reqHeaders = input.referer ? { Referer: input.referer } : undefined;
     const fetchText = async (
       url: string,
       maxBytes: number,
-    ): Promise<{ finalUrl: string; text: string } | null> => {
+    ): Promise<{ finalUrl: string; text: string; body: Buffer } | null> => {
       if (!/^https?:/i.test(url) || !this.policy.isAllowed(url).allowed) {
         return null;
       }
@@ -464,9 +474,14 @@ export class UnityStreamingAssetsDiscovery {
         const res = await this.downloader.fetchBuffer(url, {
           timeoutMs: Math.min(timeoutMs, 60_000),
           maxBytes: Math.min(5_000_000, maxBytes),
+          ...(reqHeaders ? { headers: reqHeaders } : {}),
         });
         this.policy.assertAllowed(res.finalUrl);
-        return { finalUrl: res.finalUrl, text: res.body.toString('utf8') };
+        return {
+          finalUrl: res.finalUrl,
+          text: res.body.toString('utf8'),
+          body: res.body,
+        };
       } catch {
         return null;
       }
@@ -505,6 +520,31 @@ export class UnityStreamingAssetsDiscovery {
         });
         return true;
       }
+    };
+
+    // The Addressables runtime always fetches `<catalog>.hash` before the
+    // catalog itself (remote update check) — a packaged catalog without
+    // its sidecar 404s at runtime. Best-effort: missing sidecars are
+    // normal (local/eager catalogs) and skip silently.
+    const fetchHashSidecar = async (catalogFinalUrl: string): Promise<void> => {
+      const sidecar = hashSidecarUrl(catalogFinalUrl);
+      if (!sidecar) return;
+      const sidePkg = addressablesPackagePath(sidecar);
+      if (!sidePkg || files.some((f) => f.path === sidePkg)) return;
+      const shit = await fetchText(sidecar, 100_000);
+      if (!shit) return;
+      const ok = await pushFile(
+        sidePkg,
+        Buffer.from(shit.text, 'utf8'),
+        shit.finalUrl,
+      );
+      if (!ok) return;
+      emit({
+        level: 'info',
+        code: DiagnosticCode.UNITY_STREAMING_ASSET_DOWNLOAD_COMPLETED,
+        message: `Downloaded catalog hash sidecar: ${sidePkg}`,
+        details: { url: safeUrlForLog(shit.finalUrl) },
+      });
     };
 
     // Stage 1: locate the RuntimeData bootstrap (settings.json) or, in
@@ -580,7 +620,44 @@ export class UnityStreamingAssetsDiscovery {
         try {
           parsed = JSON.parse(hit.text);
         } catch {
-          continue;
+          // Not JSON — it may still be a binary bundle-catalog (e.g.
+          // `catalog.bundle`): package Unity bundles verbatim
+          // (magic-verified, StreamingAssets-scoped); anything else skips
+          // exactly as before.
+          if (!hasUnityBundleMagic(hit.body)) continue;
+          const bundlePkgPath = addressablesPackagePath(hit.finalUrl);
+          if (!bundlePkgPath) {
+            emit({
+              level: 'warning',
+              code: DiagnosticCode.EXTERNAL_REFERENCE,
+              message: `Skipping bundle-catalog outside StreamingAssets: ${loc.slice(0, 120)}`,
+            });
+            continue;
+          }
+          if (files.some((f) => f.path === bundlePkgPath)) break;
+          emit({
+            level: 'info',
+            code: DiagnosticCode.UNITY_STREAMING_ASSET_DOWNLOAD_STARTED,
+            message: `Downloading bundle-catalog: ${bundlePkgPath}`,
+            details: { url: safeUrlForLog(hit.finalUrl) },
+          });
+          const wroteBundle = await pushFile(
+            bundlePkgPath,
+            hit.body,
+            hit.finalUrl,
+          );
+          if (!wroteBundle) break;
+          emit({
+            level: 'info',
+            code: DiagnosticCode.UNITY_STREAMING_ASSET_DOWNLOAD_COMPLETED,
+            message: `Downloaded bundle-catalog: ${bundlePkgPath}`,
+            details: {
+              url: safeUrlForLog(hit.finalUrl),
+              bytes: hit.body.length,
+            },
+          });
+          await fetchHashSidecar(hit.finalUrl);
+          break;
         }
         if (!isAddressablesCatalog(parsed)) continue;
         catalogUrl = hit.finalUrl;
@@ -661,6 +738,7 @@ export class UnityStreamingAssetsDiscovery {
         const res = await this.downloader.fetchBuffer(abs, {
           timeoutMs: Math.min(timeoutMs, 60_000),
           maxBytes: Math.min(remaining, maxTotalBytes),
+          ...(reqHeaders ? { headers: reqHeaders } : {}),
         });
         this.policy.assertAllowed(res.finalUrl);
         if (totalBytes + res.body.length > maxTotalBytes) {
@@ -692,6 +770,8 @@ export class UnityStreamingAssetsDiscovery {
     // Stage 4: write the catalog itself — object shape IDs rewritten to
     // package-relative paths, packed v1.x catalogs verbatim (runtime
     // placeholders re-evaluate against the packaged streamingAssetsUrl).
+    // Its `.hash` sidecar travels with it (runtime update check).
+    await fetchHashSidecar(catalogUrl);
     const catalogPkgPath = catalogPackagePath(catalogUrl);
     const catalogBytes = Buffer.from(
       catalogShape === 'object'
@@ -814,6 +894,12 @@ export class UnityStreamingAssetsDiscovery {
       timeoutMs?: number;
       maxTotalBytes?: number;
       writeFile: (packagePath: string, bytes: Buffer) => Promise<void> | void;
+      /**
+       * Source page URL sent as `Referer` (CDN hotlink protection
+       * rejects bare requests). Optional so unit tests stay
+       * header-agnostic.
+       */
+      referer?: string;
       onEvent?: (d: ImportDiagnostic) => void;
     },
   ): Promise<StreamingDownloadResult> {
@@ -821,6 +907,7 @@ export class UnityStreamingAssetsDiscovery {
     const opts = defaultStreamingAssetsOptions();
     const timeoutMs = input.timeoutMs ?? opts.requestTimeoutMs;
     const maxTotalBytes = input.maxTotalBytes ?? opts.maxTotalBytes;
+    const reqHeaders = input.referer ? { Referer: input.referer } : undefined;
     const files: StreamingDownloadResult['files'] = [];
     let totalBytes = 0;
     let limitReached = false;
@@ -867,6 +954,7 @@ export class UnityStreamingAssetsDiscovery {
         const res = await this.downloader.fetchBuffer(c.url, {
           timeoutMs: Math.min(timeoutMs, 60_000),
           maxBytes: Math.min(remaining, opts.maxTotalBytes),
+          ...(reqHeaders ? { headers: reqHeaders } : {}),
         });
         this.policy.assertAllowed(res.finalUrl);
         if (totalBytes + res.body.length > maxTotalBytes) {
