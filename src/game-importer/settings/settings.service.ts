@@ -7,6 +7,8 @@ import { ImportJobEntity } from '../entities/import-job.entity';
 import { GameImportsService } from '../game-imports.service';
 import { dirUsage } from '../storage/disk-usage';
 
+const RETRYABLE_FS_ERRORS = new Set(['EBUSY', 'EPERM', 'ENOTEMPTY']);
+
 /**
  * Read-only view of every project-wide runtime setting (environment
  * driven) shown on the Settings page. Values reflect the environment the
@@ -263,7 +265,10 @@ export class SettingsService {
           break;
         } catch (err: unknown) {
           const code = (err as NodeJS.ErrnoException).code;
-          if (code === 'EBUSY' && i < retries) {
+          if (code != null && RETRYABLE_FS_ERRORS.has(code) && i < retries) {
+            this.logger.warn(
+              `Package dir ${e.name} locked (${code}), retry ${i + 1}/${retries} in ${200 + i * 300}ms`,
+            );
             await new Promise((r) => setTimeout(r, 200 + i * 300));
             continue;
           }

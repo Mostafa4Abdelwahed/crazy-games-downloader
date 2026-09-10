@@ -178,6 +178,13 @@ function killPid(pid: number): boolean {
   }
 }
 
+const RETRYABLE_FS_ERRORS = new Set(['EBUSY', 'EPERM', 'ENOTEMPTY']);
+
+function isRetryableFsError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException).code;
+  return code != null && RETRYABLE_FS_ERRORS.has(code);
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -1039,8 +1046,7 @@ export class GameImportsService implements OnModuleInit {
           await fs.promises.rm(t, { recursive: true, force: true });
           return true;
         } catch (err: unknown) {
-          const code = (err as NodeJS.ErrnoException).code;
-          if (code === 'EBUSY' && i < retries) {
+          if (isRetryableFsError(err) && i < retries) {
             await sleep(200 + i * 300);
             continue;
           }

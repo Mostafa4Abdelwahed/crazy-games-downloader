@@ -198,13 +198,42 @@ describe('SettingsService', () => {
 
     it('clearPackages reports entries it could not delete', async () => {
       const { svc } = makeService(makeRepo());
-      const rmSpy = jest
-        .spyOn(fs.promises, 'rm')
-        .mockRejectedValue(new Error('EBUSY: resource busy'));
+      // Windows throws EPERM (not EBUSY) when a process holds a handle;
+      // it must still be retried and finally reported.
+      const eperm = new Error('EPERM: operation not permitted');
+      (eperm as NodeJS.ErrnoException).code = 'EPERM';
+      const rmSpy = jest.spyOn(fs.promises, 'rm').mockRejectedValue(eperm);
       try {
         const res = await svc.clearPackages('DELETE');
         expect(res.cleared).toBe(0);
         expect(res.failed).toEqual(['pkg-1']);
+        // Retried the full 6 attempts because EPERM is retryable.
+        expect(rmSpy).toHaveBeenCalledTimes(7);
+      } finally {
+        rmSpy.mockRestore();
+      }
+    }, 15000);
+
+    it('clearPackages retries a locked package and succeeds on the next try', async () => {
+      const { svc } = makeService(makeRepo());
+      const realRm = fs.promises.rm.bind(fs.promises);
+      const rmSpy = jest.spyOn(fs.promises, 'rm').mockImplementation((async (
+        p: unknown,
+        o?: unknown,
+      ) => {
+        if (rmSpy.mock.calls.length === 1) {
+          const eperm = new Error('EPERM: operation not permitted');
+          (eperm as NodeJS.ErrnoException).code = 'EPERM';
+          throw eperm;
+        }
+        return realRm(p, o) as never;
+      }) as never);
+      try {
+        const res = await svc.clearPackages('DELETE');
+        expect(res.cleared).toBe(1);
+        expect(res.failed).toEqual([]);
+        // First call fails with EPERM, the retry goes through.
+        expect(rmSpy).toHaveBeenCalledTimes(2);
       } finally {
         rmSpy.mockRestore();
       }
