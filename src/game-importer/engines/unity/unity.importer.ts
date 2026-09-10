@@ -108,9 +108,11 @@ export class UnityImporter implements GameEngineImporter {
 
     // 1. Fetch entry page (adapter-resolved entry when provided)
     const entryTarget = context.resolvedSource?.entryUrl ?? sourceUrl;
+    const referer = sourceUrl;
     const entry = await this.downloader.fetchBuffer(entryTarget, {
       timeoutMs: Math.min(30_000, limits.timeoutMs),
       maxBytes: limits.maxDownloadBytes,
+      headers: { Referer: referer },
     });
     const html = entry.body.toString('utf8').slice(0, 1_000_000);
     const baseUrl = entry.finalUrl;
@@ -180,6 +182,7 @@ export class UnityImporter implements GameEngineImporter {
     const loaderRes = await this.downloader.fetchBuffer(loaderUrl, {
       timeoutMs: Math.min(30_000, limits.timeoutMs),
       maxBytes: limits.maxDownloadBytes,
+      headers: { Referer: referer },
     });
     this.policy.assertAllowed(loaderRes.finalUrl);
     const loaderJs = loaderRes.body.toString('utf8');
@@ -190,7 +193,8 @@ export class UnityImporter implements GameEngineImporter {
       entryUrl: baseUrl,
       adapterAssetUrls: context.resolvedSource?.assetUrls,
       adapterBuild: context.resolvedSource?.unityBuild,
-      fetchExternalScript: (url) => this.fetchExternalScriptText(url, limits),
+      fetchExternalScript: (url) =>
+        this.fetchExternalScriptText(url, limits, referer),
     });
     for (const d of discovered.diagnostics)
       emit(d.level, d.code, d.message, d.details);
@@ -279,6 +283,7 @@ export class UnityImporter implements GameEngineImporter {
       const res = await this.downloader.fetchBuffer(u, {
         timeoutMs: Math.min(60_000, limits.timeoutMs),
         maxBytes: limits.maxDownloadBytes,
+        headers: { Referer: referer },
       });
       this.policy.assertAllowed(res.finalUrl);
       let bytes = res.body;
@@ -960,10 +965,12 @@ export class UnityImporter implements GameEngineImporter {
   private async fetchExternalScriptText(
     url: string,
     limits: ImportLimits,
+    referer: string,
   ): Promise<string> {
     const res = await this.downloader.fetchBuffer(url, {
       timeoutMs: Math.min(30_000, limits.timeoutMs),
       maxBytes: Math.min(limits.maxDownloadBytes, 5_000_000),
+      headers: { Referer: referer },
     });
     this.policy.assertAllowed(res.finalUrl);
     return res.body.toString('utf8').slice(0, 1_000_000);

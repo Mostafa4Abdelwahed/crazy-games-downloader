@@ -3,6 +3,18 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { assertUrlSafe, validateRedirect, DnsResolver } from './ssrf';
 
+export interface DownloadOptions {
+  timeoutMs?: number;
+  maxBytes?: number;
+  resolver?: DnsResolver;
+  /**
+   * Extra HTTP request headers. Used to satisfy CDN hotlink protection
+   * (e.g. game-files.crazygames.com rejects requests without a valid
+   * `Referer`). Values are plain strings, validated by the caller.
+   */
+  headers?: Record<string, string>;
+}
+
 export interface FetchResult {
   finalUrl: string;
   status: number;
@@ -26,22 +38,17 @@ const MAX_REDIRECTS = 5;
  */
 @Injectable()
 export class SecureDownloader {
-  async fetchText(
-    url: string,
-    opts?: { timeoutMs?: number; maxBytes?: number; resolver?: DnsResolver },
-  ): Promise<FetchResult> {
+  async fetchText(url: string, opts?: DownloadOptions): Promise<FetchResult> {
     const res = await this.fetchBuffer(url, opts);
     return res;
   }
 
-  async fetchBuffer(
-    url: string,
-    opts?: { timeoutMs?: number; maxBytes?: number; resolver?: DnsResolver },
-  ): Promise<FetchResult> {
+  async fetchBuffer(url: string, opts?: DownloadOptions): Promise<FetchResult> {
     const timeoutMs = opts?.timeoutMs ?? 30_000;
     const maxBytes =
       opts?.maxBytes ??
       Number(process.env.IMPORT_MAX_DOWNLOAD_BYTES ?? 512 * 1024 * 1024);
+    const headers = opts?.headers;
     let current = url;
     let redirected = false;
     await assertUrlSafe(current, opts?.resolver);
@@ -55,6 +62,7 @@ export class SecureDownloader {
         resp = await fetch(current, {
           signal: controller.signal,
           redirect: 'manual',
+          ...(headers ? { headers } : {}),
         });
       } finally {
         clearTimeout(timer);
@@ -117,7 +125,7 @@ export class SecureDownloader {
   async downloadToFile(
     url: string,
     destPath: string,
-    opts?: { timeoutMs?: number; maxBytes?: number; resolver?: DnsResolver },
+    opts?: DownloadOptions,
   ): Promise<{ finalUrl: string; bytes: number; contentType?: string }> {
     const res = await this.fetchBuffer(url, opts);
     await fs.promises.mkdir(path.dirname(destPath), { recursive: true });

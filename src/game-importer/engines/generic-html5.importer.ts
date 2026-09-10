@@ -141,9 +141,12 @@ export class GenericHtml5Importer implements GameEngineImporter {
     );
 
     // ── 2. Fetch entry HTML ──────────────────────────────────────────────
+    // game-files.crazygames.com enforces Referer-based hotlink protection.
+    const referer = sourceUrl;
     const entryRes = await this.downloader.fetchBuffer(entryTarget, {
       timeoutMs: Math.min(30_000, limits.timeoutMs),
       maxBytes: Math.min(MAX_ENTRY_BYTES, limits.maxDownloadBytes),
+      headers: { Referer: referer },
     });
     this.policy.assertAllowed(entryRes.finalUrl);
     const html = entryRes.body.toString('utf8').slice(0, MAX_ENTRY_BYTES);
@@ -188,6 +191,7 @@ export class GenericHtml5Importer implements GameEngineImporter {
         res = await this.downloader.fetchBuffer(abs, {
           timeoutMs: Math.min(30_000, limits.timeoutMs),
           maxBytes: limits.maxDownloadBytes,
+          headers: { Referer: referer },
         });
       } catch (err) {
         emit(
@@ -263,6 +267,7 @@ export class GenericHtml5Importer implements GameEngineImporter {
           const r2 = await this.downloader.fetchBuffer(absStr, {
             timeoutMs: Math.min(15_000, limits.timeoutMs),
             maxBytes: limits.maxDownloadBytes,
+            headers: { Referer: referer },
           });
           this.policy.assertAllowed(r2.finalUrl);
           const name = assetLocalName(r2.finalUrl, r2.contentType);

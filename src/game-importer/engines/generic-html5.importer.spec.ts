@@ -19,10 +19,17 @@ interface FakeEntry {
 
 function fakeDownloader(map: Record<string, FakeEntry>) {
   const calls: string[] = [];
+  const headerCalls: Array<{ url: string; headers?: Record<string, string> }> =
+    [];
   return {
     calls,
-    fetchBuffer: async (url: string) => {
+    headerCalls,
+    fetchBuffer: async (
+      url: string,
+      opts?: { headers?: Record<string, string> },
+    ) => {
       calls.push(url);
+      headerCalls.push({ url, headers: opts?.headers });
       const hit = map[url];
       if (!hit) throw new Error(`Fake 404 for ${url}`);
       return {
@@ -176,6 +183,13 @@ describe('GenericHtml5Importer import', () => {
       expect(downloader.calls[0]).toBe(
         'https://www.crazygames.com/game/crazy-chameleon',
       );
+      // Every download must carry the source page Referer (CDN hotlink
+      // protection on game-files.crazygames.com rejects bare requests).
+      for (const call of downloader.headerCalls) {
+        expect(call.headers).toEqual({
+          Referer: 'https://www.crazygames.com/game/crazy-chameleon',
+        });
+      }
       const pkgFiles = listFiles(pkg.rootPath);
       const assetNames = pkgFiles
         .filter((p) => p.startsWith('assets/'))
