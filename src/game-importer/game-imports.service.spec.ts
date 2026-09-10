@@ -921,7 +921,7 @@ describe('GameImportsService run-server persistence', () => {
       (servers.findOne as jest.Mock).mockResolvedValueOnce(row);
       const res = await service.stop('job-9');
       expect(res).toEqual({ url: 'http://localhost:54321/', stopped: true });
-      expect(killSpy).toHaveBeenCalledWith(9999);
+      expect(killSpy).toHaveBeenCalledWith(9999, 'SIGTERM');
       expect(servers.delete).toHaveBeenCalledWith({ jobId: 'job-9' });
     } finally {
       killSpy.mockRestore();
@@ -990,8 +990,8 @@ describe('GameImportsService run-server persistence', () => {
       expect(res).toEqual({ killed: 1, cleared: 3 });
       expect(removed).toHaveLength(3);
       // Only the orphan whose port still answers gets a real kill signal.
-      const kills = killSpy.mock.calls.filter((c) => c[1] === undefined);
-      expect(kills).toEqual([[1111]]);
+      const kills = killSpy.mock.calls.filter((c) => c[1] === 'SIGTERM');
+      expect(kills).toEqual([[1111, 'SIGTERM']]);
     } finally {
       killSpy.mockRestore();
       await new Promise<void>((r) => srv.close(() => r()));
@@ -1180,7 +1180,9 @@ describe('GameImportsService stopAllRuns', () => {
       (servers.find as jest.Mock).mockResolvedValueOnce(rows);
       const res = await service.stopAllRuns();
       expect(res).toEqual({ stopped: 0 });
-      expect(killSpy).toHaveBeenCalledWith(4242);
+      // First call is SIGTERM (killPid); later calls are signal-0 probes
+      // from waitForReleases — both are fine as long as SIGTERM fires.
+      expect(killSpy.mock.calls[0]).toEqual([4242, 'SIGTERM']);
       expect(servers.clear).toHaveBeenCalledTimes(1);
     } finally {
       killSpy.mockRestore();

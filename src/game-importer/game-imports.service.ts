@@ -171,11 +171,47 @@ function isAlive(pid: number): boolean {
 /** Best-effort kill by pid (no handle needed). Returns whether it sent. */
 function killPid(pid: number): boolean {
   try {
-    process.kill(pid);
+    process.kill(pid, 'SIGTERM');
     return true;
   } catch {
     return false;
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function waitOnPid(pid: number, maxMs = 200): Promise<boolean> {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + maxMs;
+    const probe = () => {
+      try {
+        // Signal 0 probes liveness without killing.
+        process.kill(pid, 0);
+        if (Date.now() < deadline) {
+          setTimeout(probe, 20);
+        } else {
+          resolve(false);
+        }
+      } catch {
+        resolve(true);
+      }
+    };
+    probe();
+  });
+}
+
+async function waitForReleases(pids: number[]): Promise<void> {
+  const deadline = Date.now() + 1000;
+  for (const pid of pids) {
+    const remaining = Math.max(0, deadline - Date.now());
+    if (remaining <= 0) break;
+    await waitOnPid(pid, Math.min(remaining, 200));
+  }
+  // Grace period even after PIDs are gone — Windows may still hold
+  // file handles for a few ms after the process entry disappears.
+  await sleep(150);
 }
 
 /** True when something on loopback currently accepts `port`. */
@@ -989,13 +1025,28 @@ export class GameImportsService implements OnModuleInit {
    * Remove `target` only when it sits strictly inside `root` (never the
    * root itself, never anything outside it). Returns whether it removed.
    */
-  private async rmWithin(root: string, target: string): Promise<boolean> {
+  private async rmWithin(
+    root: string,
+    target: string,
+    retries = 6,
+  ): Promise<boolean> {
     try {
       const r = path.resolve(root);
       const t = path.resolve(target);
       if (t === r || !t.startsWith(r + path.sep)) return false;
-      await fs.promises.rm(t, { recursive: true, force: true });
-      return true;
+      for (let i = 0; ; i++) {
+        try {
+          await fs.promises.rm(t, { recursive: true, force: true });
+          return true;
+        } catch (err: unknown) {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code === 'EBUSY' && i < retries) {
+            await sleep(200 + i * 300);
+            continue;
+          }
+          return false;
+        }
+      }
     } catch {
       return false;
     }
@@ -1112,8 +1163,11 @@ export class GameImportsService implements OnModuleInit {
    */
   async stopAllRuns(): Promise<{ stopped: number }> {
     let stopped = 0;
+    const pids: number[] = [];
     for (const id of [...this.running.keys()]) {
       try {
+        const entry = this.running.get(id);
+        if (entry?.child.pid) pids.push(entry.child.pid);
         const r = await this.stop(id);
         if (r.stopped) stopped += 1;
       } catch {
@@ -1124,12 +1178,17 @@ export class GameImportsService implements OnModuleInit {
     try {
       const rows = await this.servers.find();
       for (const r of rows) {
-        if (r.pid != null) killPid(r.pid);
+        if (r.pid != null) {
+          killPid(r.pid);
+          pids.push(r.pid);
+        }
       }
       if (rows.length) await this.servers.clear();
     } catch {
       /* best-effort */
     }
+    // Give OS time to release file handles after SIGTERM.
+    if (pids.length) await waitForReleases(pids);
     return { stopped };
   }
 

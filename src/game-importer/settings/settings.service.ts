@@ -243,6 +243,7 @@ export class SettingsService {
    */
   private async rmDirChildren(
     root: string,
+    retries = 6,
   ): Promise<{ cleared: number; failed: string[] }> {
     let entries: fs.Dirent[];
     try {
@@ -254,12 +255,24 @@ export class SettingsService {
     const failed: string[] = [];
     for (const e of entries) {
       const abs = path.resolve(root, e.name);
-      try {
-        await fs.promises.rm(abs, { recursive: true, force: true });
+      let removed = false;
+      for (let i = 0; i <= retries; i++) {
+        try {
+          await fs.promises.rm(abs, { recursive: true, force: true });
+          removed = true;
+          break;
+        } catch (err: unknown) {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code === 'EBUSY' && i < retries) {
+            await new Promise((r) => setTimeout(r, 200 + i * 300));
+            continue;
+          }
+        }
+      }
+      if (removed) {
         cleared += 1;
-      } catch (err) {
+      } else {
         failed.push(e.name);
-        this.logger.warn(`Could not remove ${abs}: ${(err as Error).message}`);
       }
     }
     return { cleared, failed };

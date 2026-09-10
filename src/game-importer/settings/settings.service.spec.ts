@@ -200,7 +200,7 @@ describe('SettingsService', () => {
       const { svc } = makeService(makeRepo());
       const rmSpy = jest
         .spyOn(fs.promises, 'rm')
-        .mockRejectedValueOnce(new Error('EBUSY: resource busy'));
+        .mockRejectedValue(new Error('EBUSY: resource busy'));
       try {
         const res = await svc.clearPackages('DELETE');
         expect(res.cleared).toBe(0);
