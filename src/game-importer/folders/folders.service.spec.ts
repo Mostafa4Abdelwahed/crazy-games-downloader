@@ -286,4 +286,150 @@ describe('FoldersService', () => {
     expect(backup.folders[1].games).toEqual([]);
     expect(backup.folders[2].games).toHaveLength(1);
   });
+
+  it('exportOrganized copies approved/rejected packages under slug dirs', async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ex-'));
+    const prevExport = process.env.EXPORT_ROOT;
+    process.env.EXPORT_ROOT = path.join(root, 'exports');
+    try {
+      const pkgA = path.join(root, 'pkg-a');
+      const pkgB = path.join(root, 'pkg-b');
+      await fs.promises.mkdir(pkgA, { recursive: true });
+      await fs.promises.mkdir(pkgB, { recursive: true });
+      await fs.promises.writeFile(
+        path.join(pkgA, 'manifest.json'),
+        JSON.stringify({ slug: 'super-game' }),
+      );
+      await fs.promises.writeFile(path.join(pkgA, 'index.html'), '<h1>a</h1>');
+      await fs.promises.writeFile(path.join(pkgB, 'index.html'), '<h1>b</h1>');
+      const rows = makeRepos(
+        [{ id: 'f1', name: 'Action Games!', createdAt: new Date() }],
+        [
+          {
+            id: 'job-a',
+            seq: 1,
+            folderId: 'f1',
+            sourceUrl: 'https://x.example/game/super-game',
+            status: 'completed',
+            reviewStatus: 'approved',
+            packageUrl: pkgA,
+          },
+          {
+            id: 'job-b',
+            seq: 2,
+            folderId: 'f1',
+            sourceUrl: 'https://x.example/game/bad-game',
+            status: 'completed',
+            reviewStatus: 'rejected',
+            packageUrl: pkgB,
+          },
+          {
+            id: 'job-c',
+            seq: 3,
+            folderId: 'f1',
+            sourceUrl: 'https://x.example/game/other',
+            status: 'completed',
+            reviewStatus: 'pending',
+            packageUrl: pkgA,
+          },
+          {
+            id: 'job-d',
+            seq: 4,
+            folderId: 'f1',
+            sourceUrl: 'https://x.example/game/gone',
+            status: 'completed',
+            reviewStatus: 'approved',
+            packageUrl: null,
+          },
+        ],
+      );
+      const { service } = makeService(rows);
+      const res = await service.exportOrganized('f1');
+      expect(res.folderSlug).toBe('action-games');
+      expect(res.approved).toBe(1);
+      expect(res.rejected).toBe(1);
+      expect(res.skipped).toBe(2);
+      expect(res.approvedSlugs).toEqual(['super-game']);
+      expect(res.rejectedSlugs).toEqual(['bad-game']);
+      // Originals untouched, copies exist with content.
+      expect(await fs.promises.stat(pkgA)).toBeTruthy();
+      const copied = await fs.promises.readFile(
+        path.join(res.exportRoot, 'approved', 'super-game', 'index.html'),
+        'utf8',
+      );
+      expect(copied).toContain('<h1>a</h1>');
+      const index = JSON.parse(
+        await fs.promises.readFile(
+          path.join(res.exportRoot, 'index.json'),
+          'utf8',
+        ),
+      );
+      expect(index.items).toHaveLength(2);
+    } finally {
+      if (prevExport === undefined) delete process.env.EXPORT_ROOT;
+      else process.env.EXPORT_ROOT = prevExport;
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('exportOrganized de-duplicates colliding slugs and refreshes stale exports', async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ex2-'));
+    const prevExport = process.env.EXPORT_ROOT;
+    process.env.EXPORT_ROOT = path.join(root, 'exports');
+    try {
+      const mk = async (name: string) => {
+        const d = path.join(root, name);
+        await fs.promises.mkdir(d, { recursive: true });
+        await fs.promises.writeFile(path.join(d, 'index.html'), name);
+        return d;
+      };
+      const pkgA = await mk('p-a');
+      const pkgB = await mk('p-b');
+      const rows = makeRepos(
+        [{ id: 'f1', name: 'F', createdAt: new Date() }],
+        [
+          {
+            id: 'job-a',
+            seq: 1,
+            folderId: 'f1',
+            sourceUrl: 'https://x.example/game/same',
+            status: 'completed',
+            reviewStatus: 'approved',
+            packageUrl: pkgA,
+          },
+          {
+            id: 'job-b',
+            seq: 2,
+            folderId: 'f1',
+            sourceUrl: 'https://x.example/game/same/',
+            status: 'completed',
+            reviewStatus: 'approved',
+            packageUrl: pkgB,
+          },
+        ],
+      );
+      const { service } = makeService(rows);
+      const first = await service.exportOrganized('f1');
+      expect(first.approvedSlugs).toEqual(['same', 'same-2']);
+      // Plant a stale dir, re-export must wipe it.
+      await fs.promises.mkdir(
+        path.join(first.exportRoot, 'approved', 'stale'),
+        {
+          recursive: true,
+        },
+      );
+      const second = await service.exportOrganized('f1');
+      expect(second.approved).toBe(2);
+      await expect(
+        fs.promises.stat(path.join(second.exportRoot, 'approved', 'stale')),
+      ).rejects.toThrow();
+      await expect(service.exportOrganized('missing')).rejects.toThrow(
+        'Folder not found',
+      );
+    } finally {
+      if (prevExport === undefined) delete process.env.EXPORT_ROOT;
+      else process.env.EXPORT_ROOT = prevExport;
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  });
 });

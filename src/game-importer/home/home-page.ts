@@ -150,6 +150,10 @@ export function renderHomePage(): string {
     '.del-btn{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:999px;background:transparent;border:1px solid transparent;color:var(--text-3);cursor:pointer;transition:color .15s,background .15s}\n' +
     '.del-btn:hover{color:var(--error);background:rgba(255,95,109,.1)}\n' +
     '.del-btn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}\n' +
+    '.exp-btn{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:999px;background:transparent;border:1px solid transparent;color:var(--text-3);cursor:pointer;transition:color .15s,background .15s}\n' +
+    '.exp-btn:hover{color:var(--brand-soft);background:rgba(104,66,255,.12)}\n' +
+    '.exp-btn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}\n' +
+    '.card-actions{display:inline-flex;align-items:center;gap:4px}\n' +
     '.new-folder{border:2px dashed var(--divider);background:transparent;border-radius:var(--radius-card);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-height:150px;color:var(--text-3);cursor:pointer;transition:border-color .15s,color .15s,background .15s}\n' +
     '.new-folder:hover{border-color:var(--brand);color:var(--brand-soft);background:rgba(104,66,255,.05)}\n' +
     '.new-folder svg{width:32px;height:32px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}\n' +
@@ -222,6 +226,7 @@ export function renderHomePage(): string {
     '  var CHECK_ICON = "<svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><path d=\\"M20 6L9 17l-5-5\\"/></svg>";\n' +
     '  var PLAY_ICON = "<svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><polygon points=\\"6 3 20 12 6 21 6 3\\"/></svg>";\n' +
     '  var TRASH_ICON = "<svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><polyline points=\\"3 6 5 6 21 6\\"/><path d=\\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\\"/></svg>";\n' +
+    '  var EXPORT_ICON = "<svg viewBox=\\"0 0 24 24\\" aria-hidden=\\"true\\"><path d=\\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\\"/><polyline points=\\"7 10 12 15 17 10\\"/><line x1=\\"12\\" y1=\\"15\\" x2=\\"12\\" y2=\\"3\\"/></svg>";\n' +
     '  var RENAME_ID = null;\n' +
     '  function esc(s) {\n' +
     '    return String(s == null ? "" : s).replace(/[&<>"\']/g, function (c) {\n' +
@@ -284,14 +289,17 @@ export function renderHomePage(): string {
     '        "</div>" +\n' +
     '        "<div class=\\"folder-foot\\">" +\n' +
     '        "<span class=\\"open-hint\\">Open console →</span>" +\n' +
+    '        "<span class=\\"card-actions\\">" +\n' +
+    '        "<button class=\\"exp-btn\\" type=\\"button\\" data-id=\\"" + esc(f.id) + "\\" data-name=\\"" + esc(f.name) + "\\" title=\\"Export approved/rejected as organized copy\\" aria-label=\\"Export organized copy\\">" + EXPORT_ICON + "</button>" +\n' +
     '        "<button class=\\"del-btn\\" type=\\"button\\" data-id=\\"" + esc(f.id) + "\\" data-name=\\"" + esc(f.name) + "\\" title=\\"Delete this folder\\" aria-label=\\"Delete folder\\">" + TRASH_ICON + "</button>" +\n' +
+    '        "</span>" +\n' +
     '        "</div>" +\n' +
     '        "</div>";\n' +
     '    });\n' +
     '    grid.innerHTML = html;\n' +
     '    Array.prototype.forEach.call(grid.querySelectorAll(".folder"), function (card) {\n' +
     '      card.addEventListener("click", function (ev) {\n' +
-    '        if (ev.target.closest(".copy-btn") || ev.target.closest(".del-btn")) return;\n' +
+    '        if (ev.target.closest(".copy-btn") || ev.target.closest(".del-btn") || ev.target.closest(".exp-btn")) return;\n' +
     '        window.location.href = "/console/" + encodeURIComponent(card.getAttribute("data-id"));\n' +
     '      });\n' +
     '    });\n' +
@@ -316,6 +324,22 @@ export function renderHomePage(): string {
     '        var name = btn.getAttribute("data-name");\n' +
     '        if (!window.confirm("Delete folder \\"" + name + "\\"?\\nIts games move to ungrouped (nothing is deleted from disk).")) return;\n' +
     '        api("/folders/" + encodeURIComponent(id), { method: "DELETE" }).then(load, function (e) {\n' +
+    '          document.getElementById("foldersError").textContent = e.message;\n' +
+    '        });\n' +
+    '      });\n' +
+    '    });\n' +
+    '    Array.prototype.forEach.call(grid.querySelectorAll(".exp-btn"), function (btn) {\n' +
+    '      btn.addEventListener("click", function (ev) {\n' +
+    '        ev.stopPropagation();\n' +
+    '        var id = btn.getAttribute("data-id");\n' +
+    '        var name = btn.getAttribute("data-name");\n' +
+    '        if (!window.confirm("Export \\"" + name + "\\" as organized copy?\\nApproved -> approved/<game-slug>, rejected -> rejected/<game-slug>. Originals stay untouched.")) return;\n' +
+    '        btn.disabled = true;\n' +
+    '        api("/folders/" + encodeURIComponent(id) + "/export-organized", { method: "POST" }).then(function (r) {\n' +
+    '          btn.disabled = false;\n' +
+    '          window.alert("Exported " + r.approved + " approved, " + r.rejected + " rejected" + (r.skipped ? " (" + r.skipped + " skipped)" : "") + (r.failed && r.failed.length ? ", " + r.failed.length + " failed" : "") + "\\n" + r.exportRoot);\n' +
+    '        }, function (e) {\n' +
+    '          btn.disabled = false;\n' +
     '          document.getElementById("foldersError").textContent = e.message;\n' +
     '        });\n' +
     '      });\n' +

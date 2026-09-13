@@ -85,6 +85,17 @@ export class FoldersController {
     return this.folders.assignJob(dto.jobId, id);
   }
 
+  /**
+   * Organized copy-out of one folder's reviewed packages:
+   * `<exports>/<folder-slug>/{approved,rejected}/<game-slug>/…`.
+   * Copy-only (originals + DB untouched); re-running refreshes the export.
+   */
+  @Post(':id/export-organized')
+  @HttpCode(200)
+  exportOrganized(@Param('id') id: string) {
+    return this.folders.exportOrganized(id);
+  }
+
   @Post('unassign')
   @HttpCode(200)
   unassign(@Body() dto: AssignJobDto) {

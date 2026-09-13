@@ -40,6 +40,14 @@ describe('home page (folders)', () => {
     expect(html).toContain('Its games move to ungrouped');
   });
 
+  it('exports each folder as an organized approved/rejected copy', () => {
+    const html = renderHomePage();
+    expect(html).toContain('class=\\"exp-btn\\"');
+    expect(html).toContain('/export-organized');
+    expect(html).toContain('method: "POST"');
+    expect(html).toContain('Export approved/rejected as organized copy');
+  });
+
   it('links to the ungrouped console', () => {
     const html = renderHomePage();
     expect(html).toContain('href="/console/none"');

@@ -1,11 +1,26 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'node:crypto';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Repository } from 'typeorm';
 import { GameFolderEntity } from '../entities/game-folder.entity';
 import { ImportJobEntity } from '../entities/import-job.entity';
 import { dirUsage } from '../storage/disk-usage';
+
+/**
+ * URL-safe slug used for export directory names. Mirrors the engine
+ * `deriveSlug` rules (lowercase, non-alphanumerics to dashes, trimmed,
+ * max 80 chars). Returns '' when nothing slug-safe remains (e.g. a
+ * non-latin folder name) so callers can fall back to an id-based name.
+ */
+export function slugifyName(input: string): string {
+  return (input ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+}
 
 /**
  * Folder view rendered on the home page: name, job stats and the real
@@ -197,6 +212,221 @@ export class FoldersService {
   /** Real packages root (same root for every folder; shown for copy). */
   packagesRoot(): string {
     return path.resolve(process.env.STORAGE_LOCAL_ROOT ?? './data/packages');
+  }
+
+  /** Base dir for organized per-folder exports (Copy, never Move). */
+  exportsRoot(): string {
+    return path.resolve(process.env.EXPORT_ROOT ?? './data/exports');
+  }
+
+  /**
+   * Copy-out (Export) of one folder's reviewed packages:
+   * `<exportsRoot>/<folder-slug>/approved/<game-slug>/…` and
+   * `…/rejected/<game-slug>/…`, plus an `index.json` manifest.
+   *
+   * - Copy only (the originals + DB rows are untouched, run buttons keep
+   *   working). Re-running wipes this folder's previous export first so a
+   *   changed verdict never leaves a stale copy behind.
+   * - Only `approved`/`rejected` jobs WITH an existing package dir are
+   *   copied; pending/in-flight/missing-package jobs are counted as
+   *   skipped (the operator asked for two buckets only).
+   * - Directory names are slugs: the folder dir is the slugified folder
+   *   name, each game dir prefers the package `manifest.json` slug, then
+   *   the source-URL slug, then `game-<seq|id>`. Collisions get `-2`, …
+   */
+  async exportOrganized(id: string): Promise<{
+    folderId: string;
+    folderName: string;
+    folderSlug: string;
+    exportRoot: string;
+    approved: number;
+    rejected: number;
+    skipped: number;
+    failed: { jobId: string; error: string }[];
+    approvedSlugs: string[];
+    rejectedSlugs: string[];
+  }> {
+    const f = await this.folders.findOne({ where: { id } });
+    if (!f) throw new BadRequestException(`Folder not found: ${id}`);
+    const folderSlug = slugifyName(f.name) || `folder-${f.id.slice(0, 8)}`;
+    const base = this.exportsRoot();
+    const exportRoot = path.resolve(base, folderSlug);
+    if (exportRoot !== base && !exportRoot.startsWith(base + path.sep)) {
+      throw new BadRequestException('Export path escapes exports root.');
+    }
+    const approvedRoot = path.join(exportRoot, 'approved');
+    const rejectedRoot = path.join(exportRoot, 'rejected');
+
+    const jobs = await this.jobs.find({
+      where: { folderId: id },
+      select: ['id', 'seq', 'sourceUrl', 'reviewStatus', 'packageUrl'],
+    });
+
+    let skipped = 0;
+    const failed: { jobId: string; error: string }[] = [];
+    const approvedSlugs: string[] = [];
+    const rejectedSlugs: string[] = [];
+    const usedApproved = new Set<string>();
+    const usedRejected = new Set<string>();
+    const index: {
+      jobId: string;
+      seq: number | null;
+      sourceUrl: string;
+      reviewStatus: string;
+      slug: string;
+    }[] = [];
+    const pendingCopy: { src: string; dest: string }[] = [];
+
+    for (const j of jobs) {
+      const verdict = (j as { reviewStatus?: string }).reviewStatus;
+      if (verdict !== 'approved' && verdict !== 'rejected') {
+        skipped += 1;
+        continue;
+      }
+      const pkg = (j as { packageUrl?: string | null }).packageUrl;
+      if (!pkg) {
+        skipped += 1;
+        continue;
+      }
+      let stat: fs.Stats;
+      try {
+        stat = await fs.promises.stat(pkg);
+      } catch {
+        skipped += 1;
+        continue;
+      }
+      if (!stat.isDirectory()) {
+        skipped += 1;
+        continue;
+      }
+      const used = verdict === 'approved' ? usedApproved : usedRejected;
+      const slug = await this.uniqueGameSlug(j as never, used);
+      used.add(slug);
+      const dest = path.join(
+        verdict === 'approved' ? approvedRoot : rejectedRoot,
+        slug,
+      );
+      if (dest !== exportRoot && !dest.startsWith(exportRoot + path.sep)) {
+        failed.push({ jobId: j.id, error: 'Destination escapes export root.' });
+        continue;
+      }
+      pendingCopy.push({ src: pkg, dest });
+      if (verdict === 'approved') approvedSlugs.push(slug);
+      else rejectedSlugs.push(slug);
+      index.push({
+        jobId: j.id,
+        seq: (j as { seq?: number | null }).seq ?? null,
+        sourceUrl: (j as { sourceUrl?: string }).sourceUrl ?? '',
+        reviewStatus: verdict,
+        slug,
+      });
+    }
+
+    // Fresh export per folder: drop the previous copy so re-reviews and
+    // removed packages never leave stale dirs behind.
+    await fs.promises.rm(exportRoot, { recursive: true, force: true });
+    await fs.promises.mkdir(approvedRoot, { recursive: true });
+    await fs.promises.mkdir(rejectedRoot, { recursive: true });
+
+    for (const [i, item] of pendingCopy.entries()) {
+      try {
+        await fs.promises.cp(item.src, item.dest, { recursive: true });
+      } catch (err) {
+        failed.push({
+          jobId: index[i]?.jobId ?? 'unknown',
+          error: (err as Error).message,
+        });
+      }
+    }
+    const failedIds = new Set(failed.map((x) => x.jobId));
+    const okApproved = approvedSlugs.filter((_, i) => {
+      const item = index.filter((x) => x.reviewStatus === 'approved')[i];
+      return item && !failedIds.has(item.jobId);
+    });
+    const okRejected = rejectedSlugs.filter((_, i) => {
+      const item = index.filter((x) => x.reviewStatus === 'rejected')[i];
+      return item && !failedIds.has(item.jobId);
+    });
+
+    await fs.promises.writeFile(
+      path.join(exportRoot, 'index.json'),
+      JSON.stringify(
+        {
+          exportedAt: new Date().toISOString(),
+          folderId: f.id,
+          folderName: f.name,
+          folderSlug,
+          items: index.filter((x) => !failedIds.has(x.jobId)),
+        },
+        null,
+        2,
+      ),
+    );
+    this.logger.log(
+      `Exported folder "${f.name}" (${id}): ${okApproved.length} approved, ` +
+        `${okRejected.length} rejected, ${skipped} skipped -> ${exportRoot}`,
+    );
+    return {
+      folderId: f.id,
+      folderName: f.name,
+      folderSlug,
+      exportRoot,
+      approved: okApproved.length,
+      rejected: okRejected.length,
+      skipped,
+      failed,
+      approvedSlugs: okApproved,
+      rejectedSlugs: okRejected,
+    };
+  }
+
+  /** Unique game dir slug for one job (manifest slug -> URL slug -> fallback). */
+  private async uniqueGameSlug(
+    job: {
+      id: string;
+      seq?: number | null;
+      sourceUrl?: string;
+      packageUrl?: string | null;
+    },
+    used: Set<string>,
+  ): Promise<string> {
+    let base = '';
+    if (job.packageUrl) {
+      try {
+        const raw = await fs.promises.readFile(
+          path.join(job.packageUrl, 'manifest.json'),
+          'utf8',
+        );
+        const slug = (JSON.parse(raw) as { slug?: unknown }).slug;
+        if (typeof slug === 'string' && /^[a-z0-9-]{1,80}$/.test(slug)) {
+          base = slug;
+        }
+      } catch {
+        base = '';
+      }
+    }
+    if (!base) base = slugifyName(this.slugFromUrl(job.sourceUrl ?? ''));
+    if (!base) base = `game-${job.seq ?? job.id.slice(0, 8)}`;
+    base = base.slice(0, 60) || `game-${job.id.slice(0, 8)}`;
+    let candidate = base;
+    let n = 2;
+    while (used.has(candidate)) {
+      const suffix = `-${n}`;
+      candidate = base.slice(0, 60 - suffix.length) + suffix;
+      n += 1;
+    }
+    return candidate;
+  }
+
+  /** Last URL path segment (or hostname) used as the slug source. */
+  private slugFromUrl(sourceUrl: string): string {
+    try {
+      const u = new URL(sourceUrl);
+      const segs = u.pathname.split('/').filter(Boolean);
+      return segs.pop() ?? u.hostname;
+    } catch {
+      return sourceUrl.split('/').filter(Boolean).pop() ?? '';
+    }
   }
 
   /**
