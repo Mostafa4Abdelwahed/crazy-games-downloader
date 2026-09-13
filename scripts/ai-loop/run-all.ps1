@@ -22,11 +22,11 @@ param(
 
   [int]$Port = 8080,
 
-  [string]$TemplatePath = (Join-Path $PSScriptRoot 'prompt.template.md'),
+  [string]$TemplatePath = '',
 
-  [string]$WorkspaceRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
+  [string]$WorkspaceRoot = '',
 
-  [string]$LogDir = (Join-Path $PSScriptRoot 'logs'),
+  [string]$LogDir = '',
 
   [string]$StateFile = '',
 
@@ -48,6 +48,20 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Resolve script dir without relying on $PSScriptRoot in param defaults
+# (it can be empty with some `powershell -File` invocation styles).
+$scriptDir = $PSScriptRoot
+if ([string]::IsNullOrEmpty($scriptDir)) {
+  $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+if ([string]::IsNullOrEmpty($scriptDir)) {
+  $scriptDir = Join-Path (Get-Location).Path 'scripts\ai-loop'
+}
+$runOne = Join-Path $scriptDir 'run-one.ps1'
+if ($TemplatePath -eq '') { $TemplatePath = Join-Path $scriptDir 'prompt.template.md' }
+if ($WorkspaceRoot -eq '') { $WorkspaceRoot = (Resolve-Path (Join-Path $scriptDir '..\..')).Path }
+if ($LogDir -eq '') { $LogDir = Join-Path $scriptDir 'logs' }
 
 if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
   throw "Root not found: $Root"
@@ -121,7 +135,6 @@ function Save-State {
   $state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $StateFile -Encoding UTF8
 }
 
-$runOne = Join-Path $PSScriptRoot 'run-one.ps1'
 $results = @()
 $index = 0
 
