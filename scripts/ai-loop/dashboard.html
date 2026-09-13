@@ -74,6 +74,7 @@
     <button id="btnStop" disabled>إيقاف</button>
     <span id="runState">متوقف</span>
   </div>
+  <div id="activity" class="muted" style="margin-top:8px"></div>
   <div id="err"></div>
 </div>
 
@@ -100,7 +101,13 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-let timer = null, logTimer = null;
+let timer = null, logTimer = null, wasRunning = false;
+
+function setLogAuto(on) {
+  $('logAuto').checked = on;
+  if (logTimer) { clearInterval(logTimer); logTimer = null; }
+  if (on) logTimer = setInterval(loadLog, 4000);
+}
 
 function showErr(m) { $('err').textContent = m || ''; }
 
@@ -118,8 +125,14 @@ async function refresh() {
     const s = await api('/api/status?root=' + encodeURIComponent(root));
     showErr('');
     const st = $('runState');
-    st.textContent = s.running ? ('شغال (PID ' + (s.runInfo && s.runInfo.pid) + ')') : 'متوقف';
+    const label = s.running
+      ? (s.managed ? ('شغال من الواجهة (PID ' + (s.runInfo && s.runInfo.pid) + ')') : 'شغال من بره الواجهة (opencode حي)')
+      : 'متوقف';
+    st.textContent = label;
     st.className = s.running ? 'on' : '';
+    // Follow log polling with loop state: auto-follow while running.
+    if (s.running && !wasRunning) setLogAuto(true);
+    wasRunning = s.running;
     $('btnStart').disabled = s.running;
     $('btnStop').disabled = !s.running;
     const done = s.folders.filter(f => (f.status || 'pending') === 'done').length;
@@ -134,6 +147,18 @@ async function refresh() {
     const cur = sel.value;
     sel.innerHTML = s.logs.map(l => '<option value="' + esc(l.name) + '">' + esc(l.name) + ' (' + Math.round(l.size / 1024) + ' KB)</option>').join('');
     if (cur && [...sel.options].some(o => o.value === cur)) sel.value = cur;
+    // Auto-select newest game log so tracking starts with zero clicks.
+    if (!sel.value) {
+      const firstLog = s.logs.find(l => l.name.endsWith('.log'));
+      if (firstLog) { sel.value = firstLog.name; loadLog(); }
+    }
+    const act = $('activity');
+    if (s.latestActivity && s.latestActivity.line) {
+      const ago = Math.max(0, Math.round((Date.now() - s.latestActivity.mtime) / 1000));
+      act.textContent = 'آخر نشاط (' + s.latestActivity.file + '، من ' + ago + ' ث): ' + s.latestActivity.line;
+    } else {
+      act.textContent = '';
+    }
   } catch (e) { showErr(e.message); }
 }
 
@@ -175,10 +200,7 @@ $('btnStop').onclick = async () => {
 
 $('btnLog').onclick = loadLog;
 $('root').onchange = refresh;
-$('logAuto').onchange = (e) => {
-  if (logTimer) { clearInterval(logTimer); logTimer = null; }
-  if (e.target.checked) logTimer = setInterval(loadLog, 4000);
-};
+$('logAuto').onchange = (e) => setLogAuto(e.target.checked);
 
 timer = setInterval(refresh, 3000);
 </script>

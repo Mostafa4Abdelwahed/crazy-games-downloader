@@ -82,11 +82,49 @@ function listFolders(root) {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// PowerShell 5.1 `>` redirection writes UTF-16LE, Set-Content writes UTF-8
+// (often with BOM), opencode itself emits UTF-8. Detect and decode correctly
+// so Arabic/log text never shows as mojibake.
+function readLogText(fp, maxTailBytes) {
+  let buf = fs.readFileSync(fp);
+  if (maxTailBytes && buf.length > maxTailBytes) buf = buf.slice(buf.length - maxTailBytes);
+  if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) {
+    return buf.toString('utf16le').replace(/^\uFEFF/, '');
+  }
+  if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) {
+    return Buffer.from(buf).swap16().toString('utf16le').replace(/^\uFEFF/, '');
+  }
+  let s = buf.toString('utf8');
+  if (s.indexOf('\0') !== -1) s = buf.toString('utf16le');
+  return s.replace(/^\uFEFF/, '');
+}
+
 function tailFile(filePath, n) {
-  const raw = fs.readFileSync(filePath, 'utf8');
+  const raw = readLogText(filePath, 512 * 1024);
   const lines = raw.replace(/\r\n/g, '\n').split('\n');
   if (lines.length && lines[lines.length - 1] === '') lines.pop();
   return lines.slice(Math.max(0, lines.length - n)).join('\n');
+}
+
+function readLastNonEmptyLine(fp) {
+  try {
+    const lines = readLogText(fp, 32768).replace(/\r\n/g, '\n').split('\n').map((s) => s.trim()).filter(Boolean);
+    return lines.length ? lines[lines.length - 1].slice(0, 500) : '';
+  } catch { return ''; }
+}
+
+// Detect an opencode process started OUTSIDE this UI (e.g. loop launched
+// from a PowerShell terminal), so the dashboard still shows live tracking.
+function externalLoopRunning() {
+  return new Promise((resolve) => {
+    const cmd = process.platform === 'win32'
+      ? 'tasklist /FI "IMAGENAME eq opencode.exe" /NH'
+      : 'pgrep -f "opencode run"';
+    exec(cmd, { timeout: 3000 }, (err, stdout) => {
+      if (err) return resolve(false);
+      resolve(/opencode/i.test(stdout || ''));
+    });
+  });
 }
 
 function killLoop() {
@@ -130,12 +168,28 @@ const server = http.createServer(async (req, res) => {
         try { folders = listFolders(root); } catch { folders = []; }
       }
       const state = readState();
-      const running = !!(child && child.exitCode === null);
+      const logs = listLogFiles();
+      const gameLogs = logs.filter((l) => l.name.endsWith('.log'));
+      let latestActivity = null;
+      if (gameLogs.length) {
+        const newest = gameLogs[0];
+        latestActivity = {
+          file: newest.name,
+          line: readLastNonEmptyLine(path.join(LOG_DIR, newest.name)),
+          mtime: newest.mtime,
+        };
+      }
+      const managed = !!(child && child.exitCode === null);
+      const externalRunning = managed ? false : await externalLoopRunning();
+      const running = managed || externalRunning;
       return sendJson(res, 200, {
         running,
+        managed,
+        externalRunning,
         runInfo,
+        latestActivity,
         folders: folders.map((f) => ({ ...f, ...(state[f.name] ? { status: state[f.name].status, exitCode: state[f.name].exitCode, log: state[f.name].log } : { status: 'pending' }) })),
-        logs: listLogFiles().slice(0, 60),
+        logs: logs.slice(0, 60),
       });
     }
 
