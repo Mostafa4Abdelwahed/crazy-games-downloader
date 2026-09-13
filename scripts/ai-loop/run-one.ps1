@@ -112,8 +112,15 @@ Write-Output "  log=$logFile"
 # NOTE: do NOT pipe opencode output (| Tee-Object): with stdout as a pipe,
 # opencode dies silently with empty output (verified 2026-09-13). File
 # redirection (>) works fine.
+# NOTE 2: opencode writes benign progress lines to stderr. With
+# $ErrorActionPreference='Stop', the FIRST such line throws a terminating
+# error (with an EMPTY message — exactly the "opencode.exe :" ghost we saw)
+# and kills the session before it starts. So run it under 'Continue' and
+# judge success only by $LASTEXITCODE.
+$ErrorActionPreference = 'Continue'
 & opencode @opencodeArgs > $logFile 2>&1
 $exitCode = $LASTEXITCODE
+$ErrorActionPreference = 'Stop'
 Write-Output "[exit] code=$exitCode log=$logFile"
 Write-Output "----- log tail -----"
 Get-Content -LiteralPath $logFile -Tail 25 -ErrorAction SilentlyContinue
