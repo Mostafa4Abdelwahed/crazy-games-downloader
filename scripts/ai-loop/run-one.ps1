@@ -90,15 +90,17 @@ try {
   Write-Warning ("Port check failed: " + $_.Exception.Message)
 }
 
-$opencodeArgs = @('run', '--dir', $WorkspaceRoot, '--title', "runtime-fix $gameName")
+$shortMsg = 'Execute the game runtime-verification task described in the attached file. Scope: only the game folder stated inside that file. End with the report format defined in the file.'
+$opencodeArgs = @('run', $shortMsg, '--dir', $WorkspaceRoot, '--title', "runtime-fix $gameName")
 if ($Model -ne '') { $opencodeArgs += @('--model', $Model) }
 if ($Agent -ne '') { $opencodeArgs += @('--agent', $Agent) }
 if ($AutoApprove) { $opencodeArgs += '--dangerously-skip-permissions' }
 # Pass the prompt via --file, NOT via argv: Arabic/long text on the
 # Windows command line gets encoding-mangled and crashes opencode startup.
 # opencode reads the file itself as UTF8, so nothing is lost.
+# NOTE: --file MUST be last. It is an array option and swallows any
+# positional message text placed after it (causes "File not found").
 $opencodeArgs += @('--file', $promptFile)
-$opencodeArgs += 'Execute the game runtime-verification task described in the attached file. Scope: only the game folder stated inside that file. End with the report format defined in the file.'
 
 Write-Output "[start] game=$gameName"
 Write-Output "  dir=$GameDir"
