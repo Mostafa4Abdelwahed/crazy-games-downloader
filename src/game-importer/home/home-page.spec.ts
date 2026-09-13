@@ -48,6 +48,16 @@ describe('home page (folders)', () => {
     expect(html).toContain('Export approved/rejected as organized copy');
   });
 
+  it('shows done/failed plus approved/rejected badges per folder', () => {
+    const html = renderHomePage();
+    expect(html).toContain('class=\\"chip done\\"');
+    expect(html).toContain('class=\\"chip fail\\"');
+    expect(html).toContain('class=\\"chip approved\\"');
+    expect(html).toContain('class=\\"chip rejected\\"');
+    expect(html).toContain('esc(f.jobCounts.approved)');
+    expect(html).toContain('esc(f.jobCounts.rejected)');
+  });
+
   it('links to the ungrouped console', () => {
     const html = renderHomePage();
     expect(html).toContain('href="/console/none"');

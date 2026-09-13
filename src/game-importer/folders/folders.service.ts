@@ -35,6 +35,8 @@ export interface FolderView {
     inFlight: number;
     completed: number;
     failed: number;
+    approved: number;
+    rejected: number;
   };
   /** Real filesystem root that holds every stored package. */
   packagesRoot: string;
@@ -80,11 +82,12 @@ export class FoldersService {
     for (const f of rows) {
       const all = await this.jobs.find({
         where: { folderId: f.id },
-        select: ['id', 'status'],
+        select: ['id', 'status', 'reviewStatus'],
       });
       const view = this.toView(
         f,
         all.map((j) => j.status),
+        all.map((j) => j.reviewStatus),
       );
       if (withStorage) {
         let bytes = 0;
@@ -108,11 +111,12 @@ export class FoldersService {
     if (!f) throw new BadRequestException(`Folder not found: ${id}`);
     const all = await this.jobs.find({
       where: { folderId: id },
-      select: ['status'],
+      select: ['status', 'reviewStatus'],
     });
     return this.toView(
       f,
       all.map((j) => j.status),
+      all.map((j) => j.reviewStatus),
     );
   }
 
@@ -199,11 +203,12 @@ export class FoldersService {
     if (existing) {
       const all = await this.jobs.find({
         where: { folderId: existing.id },
-        select: ['id', 'status'],
+        select: ['id', 'status', 'reviewStatus'],
       });
       return this.toView(
         existing,
         all.map((j) => j.status),
+        all.map((j) => j.reviewStatus),
       );
     }
     return this.create(clean);
@@ -503,7 +508,11 @@ export class FoldersService {
     return out;
   }
 
-  private toView(f: GameFolderEntity, statuses: string[]): FolderView {
+  private toView(
+    f: GameFolderEntity,
+    statuses: string[],
+    reviewStatuses: string[] = [],
+  ): FolderView {
     return {
       id: f.id,
       name: f.name,
@@ -515,6 +524,8 @@ export class FoldersService {
         ).length,
         completed: statuses.filter((s) => s === 'completed').length,
         failed: statuses.filter((s) => s === 'failed').length,
+        approved: reviewStatuses.filter((s) => s === 'approved').length,
+        rejected: reviewStatuses.filter((s) => s === 'rejected').length,
       },
       packagesRoot: this.packagesRoot(),
     };

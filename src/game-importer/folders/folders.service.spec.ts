@@ -96,21 +96,49 @@ describe('FoldersService', () => {
     const rows = makeRepos(
       [{ id: 'f1', name: 'A', createdAt: new Date() }],
       [
-        { id: 'j1', folderId: 'f1', status: 'completed' },
-        { id: 'j2', folderId: 'f1', status: 'downloading' },
-        { id: 'j3', folderId: 'f1', status: 'queued' },
-        { id: 'j4', folderId: 'f1', status: 'failed' },
-        { id: 'j5', folderId: null, status: 'completed' },
+        {
+          id: 'j1',
+          folderId: 'f1',
+          status: 'completed',
+          reviewStatus: 'approved',
+        },
+        {
+          id: 'j2',
+          folderId: 'f1',
+          status: 'downloading',
+          reviewStatus: 'pending',
+        },
+        { id: 'j3', folderId: 'f1', status: 'queued', reviewStatus: 'pending' },
+        {
+          id: 'j4',
+          folderId: 'f1',
+          status: 'failed',
+          reviewStatus: 'rejected',
+        },
+        {
+          id: 'j5',
+          folderId: 'f1',
+          status: 'completed',
+          reviewStatus: 'approved',
+        },
+        {
+          id: 'j6',
+          folderId: null,
+          status: 'completed',
+          reviewStatus: 'pending',
+        },
       ],
     );
     const { service } = makeService(rows);
     const list = await service.list();
     expect(list).toHaveLength(1);
     expect(list[0].jobCounts).toEqual({
-      total: 4,
+      total: 5,
       inFlight: 2,
-      completed: 1,
+      completed: 2,
       failed: 1,
+      approved: 2,
+      rejected: 1,
     });
     expect(list[0].packagesRoot).toBe(service.packagesRoot());
   });

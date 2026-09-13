@@ -143,6 +143,8 @@ export function renderHomePage(): string {
     '.chip.run{background:var(--run-bg);color:var(--run-fg);border-color:var(--run-bd)}\n' +
     '.chip.done{background:var(--ok-bg);color:var(--ok-fg);border-color:var(--ok-bd)}\n' +
     '.chip.fail{background:var(--err-bg);color:var(--err-fg);border-color:var(--err-bd)}\n' +
+    '.chip.approved{background:var(--run-bg);color:var(--run-fg);border-color:var(--run-bd)}\n' +
+    '.chip.rejected{background:var(--err-bg);color:var(--err-fg);border-color:var(--err-bd)}\n' +
     '.chip.size{background:var(--surface-raised);color:var(--text-2);border-color:var(--divider)}\n' +
     '.chip svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}\n' +
     '.folder-foot{margin-top:14px;display:flex;align-items:center;justify-content:space-between;gap:10px}\n' +
@@ -285,6 +287,8 @@ export function renderHomePage(): string {
     '        (f.jobCounts.inFlight ? "<span class=\\"chip run\\">" + f.jobCounts.inFlight + " running</span>" : "") +\n' +
     '        "<span class=\\"chip done\\">" + esc(f.jobCounts.completed) + " done</span>" +\n' +
     '        (f.jobCounts.failed ? "<span class=\\"chip fail\\">" + esc(f.jobCounts.failed) + " failed</span>" : "") +\n' +
+    '        "<span class=\\"chip approved\\">" + esc(f.jobCounts.approved) + " approved</span>" +\n' +
+    '        "<span class=\\"chip rejected\\">" + esc(f.jobCounts.rejected) + " rejected</span>" +\n' +
     '        (f.storage && f.storage.packages ? "<span class=\\"chip size\\">" + fmtBytes(f.storage.bytes) + "</span>" : "") +\n' +
     '        "</div>" +\n' +
     '        "<div class=\\"folder-foot\\">" +\n' +
