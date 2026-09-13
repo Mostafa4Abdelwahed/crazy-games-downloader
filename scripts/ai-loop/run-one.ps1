@@ -114,13 +114,22 @@ Write-Output "  log=$logFile"
 # redirection (>) works fine.
 # NOTE 2: opencode writes benign progress lines to stderr. With
 # $ErrorActionPreference='Stop', the FIRST such line throws a terminating
-# error (with an EMPTY message — exactly the "opencode.exe :" ghost we saw)
+# error with an EMPTY message (exactly the "opencode.exe :" ghost we saw)
 # and kills the session before it starts. So run it under 'Continue' and
 # judge success only by $LASTEXITCODE.
 $ErrorActionPreference = 'Continue'
 & opencode @opencodeArgs > $logFile 2>&1
 $exitCode = $LASTEXITCODE
 $ErrorActionPreference = 'Stop'
+# NOTE 3: PowerShell 5.1 `>` writes UTF-16, which opencode's Read tool
+# rejects as "binary" when a later session re-reads a prior log. Convert to
+# UTF-8 so logs stay readable (by agents and the dashboard alike).
+try {
+  $logText = Get-Content -LiteralPath $logFile -Raw -ErrorAction Stop
+  [System.IO.File]::WriteAllText($logFile, $logText, (New-Object System.Text.UTF8Encoding $false))
+} catch {
+  Write-Warning ("log recode skipped: " + $_.Exception.Message)
+}
 Write-Output "[exit] code=$exitCode log=$logFile"
 Write-Output "----- log tail -----"
 Get-Content -LiteralPath $logFile -Tail 25 -ErrorAction SilentlyContinue
