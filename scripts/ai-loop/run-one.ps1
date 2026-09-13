@@ -94,11 +94,16 @@ $opencodeArgs = @('run', '--dir', $WorkspaceRoot, '--title', "runtime-fix $gameN
 if ($Model -ne '') { $opencodeArgs += @('--model', $Model) }
 if ($Agent -ne '') { $opencodeArgs += @('--agent', $Agent) }
 if ($AutoApprove) { $opencodeArgs += '--dangerously-skip-permissions' }
-$opencodeArgs += $prompt
+# Pass the prompt via --file, NOT via argv: Arabic/long text on the
+# Windows command line gets encoding-mangled and crashes opencode startup.
+# opencode reads the file itself as UTF8, so nothing is lost.
+$opencodeArgs += @('--file', $promptFile)
+$opencodeArgs += 'Execute the game runtime-verification task described in the attached file. Scope: only the game folder stated inside that file. End with the report format defined in the file.'
 
 Write-Output "[start] game=$gameName"
 Write-Output "  dir=$GameDir"
 Write-Output "  url=$gameUrl"
+Write-Output "  prompt=$promptFile"
 Write-Output "  log=$logFile"
 
 # One fresh isolated session per folder. This is the core anti-hallucination mechanism.
