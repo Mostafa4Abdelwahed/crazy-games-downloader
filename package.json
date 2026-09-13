@@ -17,7 +17,8 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:e2e": "jest --config ./test/jest-e2e.json",
-    "validate:real": "ts-node --transpile-only scripts/validate-real.ts"
+    "validate:real": "ts-node --transpile-only scripts/validate-real.ts",
+    "loop:ui": "node scripts/ai-loop/server.js"
   },
   "dependencies": {
     "@nestjs/bullmq": "^11.0.3",

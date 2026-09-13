@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Loop Dashboard</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: Tahoma, Arial, sans-serif; background: #14171c; color: #e8eaed; margin: 0; padding: 16px; }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  .card { background: #1e232b; border: 1px solid #333a45; border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field.grow { flex: 1; min-width: 220px; }
+  label { font-size: 12px; color: #9aa3af; }
+  input[type=text], input[type=number], select { background: #11141a; color: #e8eaed; border: 1px solid #333a45; border-radius: 6px; padding: 8px; font-size: 13px; direction: ltr; text-align: left; width: 100%; }
+  input[type=checkbox] { width: 16px; height: 16px; }
+  .check { display: flex; gap: 6px; align-items: center; font-size: 13px; padding-bottom: 8px; }
+  button { border: 0; border-radius: 8px; padding: 10px 22px; font-size: 14px; font-weight: bold; cursor: pointer; font-family: inherit; }
+  #btnStart { background: #1f9d55; color: #fff; }
+  #btnStart:disabled { background: #555; cursor: not-allowed; }
+  #btnStop { background: #c0392b; color: #fff; }
+  #btnStop:disabled { background: #555; cursor: not-allowed; }
+  #runState { font-size: 13px; padding: 6px 12px; border-radius: 20px; background: #333; }
+  #runState.on { background: #1f9d55; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 8px; border-bottom: 1px solid #2c333e; text-align: right; }
+  th { color: #9aa3af; font-weight: normal; font-size: 12px; }
+  .badge { display: inline-block; padding: 3px 12px; border-radius: 14px; font-size: 12px; }
+  .pending { background: #444; } .done { background: #1f9d55; } .failed { background: #c0392b; }
+  .skipped-done, .skipped-failed { background: #555; } .dryrun { background: #555; }
+  #logView { background: #0d1015; border: 1px solid #333a45; border-radius: 8px; padding: 10px; height: 320px; overflow: auto; direction: ltr; text-align: left; font-family: Consolas, monospace; font-size: 12px; white-space: pre-wrap; }
+  .muted { color: #9aa3af; font-size: 12px; }
+  #err { color: #ff8a80; font-size: 13px; min-height: 20px; }
+</style>
+</head>
+<body>
+<h1>AI Loop Dashboard — جلسة معزولة لكل لعبة</h1>
+
+<div class="card">
+  <div class="row">
+    <div class="field grow">
+      <label>مجلد الألعاب (Root)</label>
+      <input type="text" id="root" placeholder="C:\...\data\exports\clicker\rejected">
+    </div>
+    <div class="field" style="width:90px">
+      <label>Port</label>
+      <input type="number" id="port" value="8080">
+    </div>
+    <div class="field grow">
+      <label>فقط (Only — فواصل ,)</label>
+      <input type="text" id="only" placeholder="butterfly*,moto*">
+    </div>
+    <div class="field grow">
+      <label>استثناء (Exclude)</label>
+      <input type="text" id="exclude" placeholder="arrows*">
+    </div>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <div class="field grow">
+      <label>Model (اختياري)</label>
+      <input type="text" id="model" placeholder="anthropic/claude-sonnet-4-5">
+    </div>
+    <div class="field grow">
+      <label>Agent (اختياري)</label>
+      <input type="text" id="agent" placeholder="">
+    </div>
+    <label class="check"><input type="checkbox" id="autoApprove" checked> موافقة تلقائية</label>
+    <label class="check"><input type="checkbox" id="cleanupBetween" checked> تنظيف السيرفر بين الجولات</label>
+    <label class="check"><input type="checkbox" id="redoFailed"> إعادة الفاشل</label>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <button id="btnStart">تشغيل اللوب</button>
+    <button id="btnStop" disabled>إيقاف</button>
+    <span id="runState">متوقف</span>
+  </div>
+  <div id="err"></div>
+</div>
+
+<div class="card">
+  <h1>الفولدرات <span class="muted" id="counts"></span></h1>
+  <table>
+    <thead><tr><th>اللعبة</th><th>الحالة</th><th>الخروج</th><th>اللوج</th></tr></thead>
+    <tbody id="rows"><tr><td colspan="4" class="muted">اكتب الـ Root فوق لعرض الفولدرات</td></tr></tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h1>اللوجات</h1>
+  <div class="row" style="margin-bottom:8px">
+    <div class="field grow">
+      <label>ملف اللوج</label>
+      <select id="logFile"></select>
+    </div>
+    <button id="btnLog" style="background:#333a45;color:#fff">تحديث اللوج</button>
+    <label class="check"><input type="checkbox" id="logAuto"> تحديث تلقائي</label>
+  </div>
+  <div id="logView" class="muted">اختر ملفاً لعرض آخر سطوره</div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let timer = null, logTimer = null;
+
+function showErr(m) { $('err').textContent = m || ''; }
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+
+async function refresh() {
+  const root = $('root').value.trim();
+  if (!root) return;
+  try {
+    const s = await api('/api/status?root=' + encodeURIComponent(root));
+    showErr('');
+    const st = $('runState');
+    st.textContent = s.running ? ('شغال (PID ' + (s.runInfo && s.runInfo.pid) + ')') : 'متوقف';
+    st.className = s.running ? 'on' : '';
+    $('btnStart').disabled = s.running;
+    $('btnStop').disabled = !s.running;
+    const done = s.folders.filter(f => (f.status || 'pending') === 'done').length;
+    $('counts').textContent = ' — ' + done + ' / ' + s.folders.length + ' خلصوا';
+    $('rows').innerHTML = s.folders.map(f => {
+      const stt = f.status || 'pending';
+      return '<tr><td>' + esc(f.name) + '</td><td><span class="badge ' + stt + '">' + stt + '</span></td>' +
+        '<td>' + (f.exitCode === undefined || f.exitCode === '' ? '—' : esc(String(f.exitCode))) + '</td>' +
+        '<td class="muted">' + (f.log ? esc(shortPath(f.log)) : '—') + '</td></tr>';
+    }).join('') || '<tr><td colspan="4" class="muted">لا فولدرات</td></tr>';
+    const sel = $('logFile');
+    const cur = sel.value;
+    sel.innerHTML = s.logs.map(l => '<option value="' + esc(l.name) + '">' + esc(l.name) + ' (' + Math.round(l.size / 1024) + ' KB)</option>').join('');
+    if (cur && [...sel.options].some(o => o.value === cur)) sel.value = cur;
+  } catch (e) { showErr(e.message); }
+}
+
+async function loadLog() {
+  const f = $('logFile').value;
+  if (!f) return;
+  try {
+    const j = await api('/api/log?file=' + encodeURIComponent(f) + '&tail=200');
+    const v = $('logView');
+    v.textContent = j.content || '(فارغ)';
+    v.classList.remove('muted');
+    v.scrollTop = v.scrollHeight;
+  } catch (e) { showErr(e.message); }
+}
+
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function shortPath(p) { const i = Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/')); return i >= 0 ? p.slice(i + 1) : p; }
+
+$('btnStart').onclick = async () => {
+  const body = {
+    root: $('root').value.trim(), port: $('port').value,
+    only: $('only').value.trim(), exclude: $('exclude').value.trim(),
+    model: $('model').value.trim(), agent: $('agent').value.trim(),
+    autoApprove: $('autoApprove').checked, cleanupBetween: $('cleanupBetween').checked,
+    redoFailed: $('redoFailed').checked
+  };
+  if (!body.root) return showErr('اكتب الـ Root أولاً');
+  try {
+    showErr('');
+    await api('/api/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    refresh();
+  } catch (e) { showErr(e.message); }
+};
+
+$('btnStop').onclick = async () => {
+  try { await api('/api/stop', { method: 'POST' }); refresh(); }
+  catch (e) { showErr(e.message); }
+};
+
+$('btnLog').onclick = loadLog;
+$('root').onchange = refresh;
+$('logAuto').onchange = (e) => {
+  if (logTimer) { clearInterval(logTimer); logTimer = null; }
+  if (e.target.checked) logTimer = setInterval(loadLog, 4000);
+};
+
+timer = setInterval(refresh, 3000);
+</script>
+</body>
+</html>
