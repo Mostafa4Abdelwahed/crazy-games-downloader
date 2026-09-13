@@ -109,7 +109,12 @@ Write-Output "  prompt=$promptFile"
 Write-Output "  log=$logFile"
 
 # One fresh isolated session per folder. This is the core anti-hallucination mechanism.
-& opencode @opencodeArgs 2>&1 | Tee-Object -FilePath $logFile
+# NOTE: do NOT pipe opencode output (| Tee-Object): with stdout as a pipe,
+# opencode dies silently with empty output (verified 2026-09-13). File
+# redirection (>) works fine.
+& opencode @opencodeArgs > $logFile 2>&1
 $exitCode = $LASTEXITCODE
 Write-Output "[exit] code=$exitCode log=$logFile"
+Write-Output "----- log tail -----"
+Get-Content -LiteralPath $logFile -Tail 25 -ErrorAction SilentlyContinue
 exit $exitCode
