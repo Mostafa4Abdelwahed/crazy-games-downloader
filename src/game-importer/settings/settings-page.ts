@@ -181,6 +181,10 @@ export function renderSettingsPage(): string {
     '</div>\n' +
     '</section>\n' +
     '<section class="card">\n' +
+    '<h2 class="section-title">Job outcomes</h2>\n' +
+    '<div id="jobStats" class="stats" style="margin-top:14px"></div>\n' +
+    '</section>\n' +
+    '<section class="card">\n' +
     '<h2 class="section-title">Server</h2>\n' +
     '<div class="kv" id="kvServer"></div>\n' +
     '</section>\n' +
@@ -299,6 +303,11 @@ export function renderSettingsPage(): string {
     '      "<div class=\\"stat\\"><b>" + esc(s.stats.jobs) + "</b><small>Jobs</small></div>" +\n' +
     '      "<div class=\\"stat\\"><b>" + esc(s.stats.packages) + "</b><small>Packages · " + fmtBytes(s.stats.packagesBytes || 0) + "</small></div>" +\n' +
     '      "<div class=\\"stat\\"><b>" + esc(s.stats.workDirs) + "</b><small>Work dirs · " + fmtBytes(s.stats.workBytes || 0) + "</small></div>";\n' +
+    '    document.getElementById("jobStats").innerHTML =\n' +
+    '      "<div class=\\"stat\\"><b>" + esc(s.stats.approved != null ? s.stats.approved : 0) + "</b><small>Approved</small></div>" +\n' +
+    '      "<div class=\\"stat\\"><b>" + esc(s.stats.rejected != null ? s.stats.rejected : 0) + "</b><small>Rejected</small></div>" +\n' +
+    '      "<div class=\\"stat\\"><b>" + esc(s.stats.completed != null ? s.stats.completed : 0) + "</b><small>Completed</small></div>" +\n' +
+    '      "<div class=\\"stat\\"><b>" + esc(s.stats.failed != null ? s.stats.failed : 0) + "</b><small>Failed</small></div>";\n' +
     '    document.getElementById("kvServer").innerHTML =\n' +
     '      kvRow("Port", esc(s.server.port)) +\n' +
     '      kvRow("Python executable", "<code>" + esc(s.runtime.python) + "</code>");\n' +

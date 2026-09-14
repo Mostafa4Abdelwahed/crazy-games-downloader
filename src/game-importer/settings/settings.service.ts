@@ -51,6 +51,10 @@ export interface SettingsView {
     workDirs: number;
     packagesBytes: number;
     workBytes: number;
+    approved: number;
+    rejected: number;
+    completed: number;
+    failed: number;
   };
 }
 
@@ -288,17 +292,35 @@ export class SettingsService {
     return { cleared, failed };
   }
 
-  /** Job/package/work counts + on-disk usage for the stats card. */
+  /** Job/package/work counts + on-disk usage for the stats cards. */
   private async stats(): Promise<SettingsView['stats']> {
-    let jobsCount = 0;
-    try {
-      jobsCount = await this.jobs.count();
-    } catch {
-      jobsCount = 0;
-    }
+    const safeCount = async (where?: Record<string, unknown>): Promise<number> => {
+      try {
+        return where
+          ? await this.jobs.count({ where: where as never })
+          : await this.jobs.count();
+      } catch {
+        return 0;
+      }
+    };
     const storageRoot = this.storageRoot();
     const workRoot = this.workRoot();
-    const [packages, workDirs, packagesUsage, workUsage] = await Promise.all([
+    const [
+      jobsCount,
+      approved,
+      rejected,
+      completed,
+      failed,
+      packages,
+      workDirs,
+      packagesUsage,
+      workUsage,
+    ] = await Promise.all([
+      safeCount(),
+      safeCount({ reviewStatus: 'approved' }),
+      safeCount({ reviewStatus: 'rejected' }),
+      safeCount({ status: 'completed' }),
+      safeCount({ status: 'failed' }),
       this.countChildren(storageRoot),
       this.countChildren(workRoot),
       dirUsage(storageRoot),
@@ -310,6 +332,10 @@ export class SettingsService {
       workDirs,
       packagesBytes: packagesUsage.bytes,
       workBytes: workUsage.bytes,
+      approved,
+      rejected,
+      completed,
+      failed,
     };
   }
 
